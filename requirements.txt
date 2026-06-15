@@ -1,0 +1,7 @@
+requests
+qdrant-client
+python-dotenv
+langchain-community
+langchain-text-splitters
+unstructured
+markdown
