@@ -284,37 +284,29 @@ def qdrant_get_indexed_paths(
     if not filter_paths:
         return {}
 
-    log.info("🔍 Querying Qdrant for indexed paths of files: %s", filter_paths)
     path_hashes: dict[str, str] = {}
     try:
-        # Scroll points matching the filter_paths in batches using pagination
-        offset = None
-        while True:
-            points, offset = client.scroll(
-                collection_name=collection,
-                scroll_filter=Filter(
-                    must=[
-                        FieldCondition(
-                            key="file_path",
-                            match=MatchAny(any=filter_paths),
-                        )
-                    ]
-                ),
-                limit=100,
-                with_payload=["file_path", "file_hash"],
-                with_vectors=False,
-                offset=offset,
-            )
-            for point in points:
-                payload = point.payload or {}
-                fp = payload.get("file_path")
-                fh = payload.get("file_hash")
-                if fp:
-                    path_hashes[fp] = fh if fh else "__legacy__"
-            
-            if not points or offset is None:
-                break
-        log.info("🔍 Qdrant returned indexed hashes for files: %s", list(path_hashes.keys()))
+        # Scroll points matching the filter_paths in a single batch with a high limit
+        points, _ = client.scroll(
+            collection_name=collection,
+            scroll_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="file_path",
+                        match=MatchAny(any=filter_paths),
+                    )
+                ]
+            ),
+            limit=10000,
+            with_payload=["file_path", "file_hash"],
+            with_vectors=False,
+        )
+        for point in points:
+            payload = point.payload or {}
+            fp = payload.get("file_path")
+            fh = payload.get("file_hash")
+            if fp:
+                path_hashes[fp] = fh if fh else "__legacy__"
     except Exception as exc:
         log.warning("Failed to query indexed paths from Qdrant collection '%s': %s", collection, exc)
 
