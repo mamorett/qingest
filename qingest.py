@@ -286,27 +286,33 @@ def qdrant_get_indexed_paths(
 
     path_hashes: dict[str, str] = {}
     try:
-        # Scroll points matching the filter_paths in batches
-        points, _ = client.scroll(
-            collection_name=collection,
-            scroll_filter=Filter(
-                must=[
-                    FieldCondition(
-                        key="file_path",
-                        match=MatchAny(any=filter_paths),
-                    )
-                ]
-            ),
-            limit=10000,
-            with_payload=["file_path", "file_hash"],
-            with_vectors=False,
-        )
-        for point in points:
-            payload = point.payload or {}
-            fp = payload.get("file_path")
-            fh = payload.get("file_hash")
-            if fp:
-                path_hashes[fp] = fh if fh else "__legacy__"
+        # Scroll points matching the filter_paths in batches using pagination
+        offset = None
+        while True:
+            points, offset = client.scroll(
+                collection_name=collection,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="file_path",
+                            match=MatchAny(any=filter_paths),
+                        )
+                    ]
+                ),
+                limit=1000,
+                with_payload=["file_path", "file_hash"],
+                with_vectors=False,
+                offset=offset,
+            )
+            for point in points:
+                payload = point.payload or {}
+                fp = payload.get("file_path")
+                fh = payload.get("file_hash")
+                if fp:
+                    path_hashes[fp] = fh if fh else "__legacy__"
+            
+            if offset is None:
+                break
     except Exception as exc:
         log.warning("Failed to query indexed paths from Qdrant collection '%s': %s", collection, exc)
 
@@ -578,7 +584,7 @@ def main() -> None:
     log.info("Using Qdrant: %s (Collection: %s)", args.qdrant_url, args.collection)
 
     # Initialize Qdrant client
-    client = QdrantClient(url=args.qdrant_url, api_key=args.qdrant_api_key)
+    client = QdrantClient(url=args.qdrant_url, api_key=args.qdrant_api_key, timeout=60.0)
 
     collection_ensured = False
 
@@ -626,7 +632,6 @@ def main() -> None:
                 log.warning("Could not query existing hashes for batch (will process all): %s", exc)
 
         files_to_process_this_batch: list[tuple[str, str, str]] = [] # (abs, rel, hash)
-        paths_to_evict_this_batch: set[str] = set()
 
         for f in batch_files:
             rel = os.path.relpath(f, directory)
@@ -635,6 +640,12 @@ def main() -> None:
             current_hash = batch_hashes[rel]
             exists_in_db = rel in indexed_file_hashes
             stored_hash = indexed_file_hashes.get(rel)
+
+            if exists_in_db:
+                log.info("🔍 DB check: '%s' | Stored Hash: %s | Current Hash: %s | Match: %s", 
+                         rel, stored_hash, current_hash, stored_hash == current_hash)
+            else:
+                log.info("🔍 DB check: '%s' | Not found in collection", rel)
 
             should_process = False
             reason = ""
@@ -645,21 +656,19 @@ def main() -> None:
             elif args.force:
                 should_process = True
                 reason = "Force replace (--force)"
-                paths_to_evict_this_batch.add(rel)
             elif stored_hash == "__legacy__":
                 # Already in DB but predates hash tracking — skip unless --force
                 log.info("⏭️  %s: Already indexed (legacy record). Skipping.", rel)
                 should_process = False
             elif stored_hash != current_hash:
                 should_process = True
-                reason = "Modified (hash mismatch)"
-                paths_to_evict_this_batch.add(rel)
+                reason = f"Modified (hash mismatch: stored={stored_hash}, current={current_hash})"
             else:
                 log.info("⏭️  %s: Identical (hash match). Skipping.", rel)
                 should_process = False
 
             if should_process:
-                log.info("🚀 Processing: %s (%s)", rel, reason)
+                log.info("🚀 Stage for ingestion: %s (%s)", rel, reason)
                 files_to_process_this_batch.append((f, rel, current_hash))
             else:
                 total_skipped += 1
@@ -668,8 +677,11 @@ def main() -> None:
             log.info("No files to update in this batch.")
             continue
 
-        if not args.dry_run and paths_to_evict_this_batch:
-            qdrant_delete_by_paths(client, args.collection, paths_to_evict_this_batch)
+        if not args.dry_run:
+            paths_to_delete = {rel for _, rel, _ in files_to_process_this_batch}
+            if paths_to_delete:
+                log.info("Cleaning old points from collection for: %s", paths_to_delete)
+                qdrant_delete_by_paths(client, args.collection, paths_to_delete)
 
         # b. Chunk the pre-read and normalized text
         batch_chunks: list[Chunk] = []
