@@ -110,7 +110,23 @@ Points are uploaded to Qdrant with:
 
 ## 🔍 Searching your Knowledge
 
-Once ingested, you can query your collection using the Qdrant Client:
+You can query your collection using either the provided query utility script or programmatically.
+
+### 1. Using the Query Script
+Use the built-in `query_qdrant.py` script to test query search from the command line. It automatically loads your configuration, generates embeddings for your query, and searches Qdrant:
+
+```bash
+# Basic query (uses default settings from .env)
+python query_qdrant.py "How do I configure the server?"
+
+# Specify Qdrant URL and collection
+python query_qdrant.py "How do I configure the server?" \
+    --qdrant-url http://parma.sodalitas.net:6333 \
+    --collection fffprose
+```
+
+### 2. Programmatically
+You can perform similarity search queries programmatically using the Qdrant client:
 
 ```python
 from qdrant_client import QdrantClient
