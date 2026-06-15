@@ -51,7 +51,6 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchAny, PayloadSchemaType
 
 # LangChain imports for advanced chunking
-from langchain_community.document_loaders import UnstructuredMarkdownLoader
 from langchain_text_splitters import MarkdownTextSplitter
 
 # Load .env into os.environ (CLI args still override these)
@@ -106,10 +105,10 @@ def chunk_markdown_file(
 ) -> list[Chunk]:
     """Split a markdown file's text into semantic chunks using LangChain."""
     try:
-        loader = UnstructuredMarkdownLoader(abs_path)
-        documents = loader.load()
+        with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
     except Exception as exc:
-        log.error("Failed to load '%s' with Unstructured: %s", abs_path, exc)
+        log.error("Failed to read file '%s': %s", abs_path, exc)
         return []
 
     splitter = MarkdownTextSplitter(
@@ -117,23 +116,22 @@ def chunk_markdown_file(
         chunk_overlap=chunk_overlap,
     )
     
-    # Split the documents
-    st_chunks = splitter.split_documents(documents)
+    # Split the markdown text
+    st_chunks = splitter.split_text(text)
     
     return [
         Chunk(
             file_path=file_path,
             chunk_index=i,
-            content=doc.page_content,
+            content=chunk_text,
             file_hash=file_hash,
             metadata={
                 "source_file": file_path,
                 "total_chunks": len(st_chunks),
-                **doc.metadata
             },
         )
-        for i, doc in enumerate(st_chunks)
-        if doc.page_content.strip()
+        for i, chunk_text in enumerate(st_chunks)
+        if chunk_text.strip()
     ]
 
 
