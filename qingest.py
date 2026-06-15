@@ -321,7 +321,11 @@ def qdrant_store_embeddings(
         return count
 
     try:
-        client.upsert(collection_name=collection, points=points)
+        # Batch upserts to prevent exceeding Qdrant's payload size limit (default 32MB)
+        upsert_batch_size = 100
+        for idx in range(0, len(points), upsert_batch_size):
+            batch_points = points[idx : idx + upsert_batch_size]
+            client.upsert(collection_name=collection, points=batch_points)
         count = len(points)
     except Exception as exc:
         log.error("Failed to upsert chunks to Qdrant collection '%s': %s", collection, exc)
