@@ -28,15 +28,20 @@ Usage examples
 
   # Force re-embedding of already-indexed files
   python qingest.py --dir ./docs --force
+
+  # Preview normalization without embedding anything
+  python qingest.py --dir ./docs --normalize --preview
 """
 
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import time
 import uuid
@@ -55,14 +60,6 @@ from langchain_text_splitters import MarkdownTextSplitter
 
 # Load .env into os.environ (CLI args still override these)
 load_dotenv()
-
-def get_file_hash(filepath: str) -> str:
-    """Calculate the SHA256 hash of a file."""
-    hasher = hashlib.sha256()
-    with open(filepath, 'rb') as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -93,24 +90,38 @@ class Chunk:
 
 
 # ---------------------------------------------------------------------------
+# Text Normalization
+# ---------------------------------------------------------------------------
+
+def normalize_text(text: str) -> str:
+    """Normalize text by removing non-printing characters and collapsing redundant empty lines."""
+    # Remove BOM if present
+    text = text.lstrip('\ufeff')
+    
+    # Standardize newlines
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    
+    # Remove control characters (ASCII 0-31 except tab \t (9) and newline \n (10), plus DEL 127)
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+    
+    # Collapse 3 or more consecutive newlines (with optional whitespace in between) to exactly two newlines
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+    
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Chunking logic
 # ---------------------------------------------------------------------------
 
-def chunk_markdown_file(
+def chunk_markdown_text(
     file_path: str,
-    abs_path: str,
+    text: str,
     file_hash: str,
     chunk_size: int = 800,
     chunk_overlap: int = 200,
 ) -> list[Chunk]:
     """Split a markdown file's text into semantic chunks using LangChain."""
-    try:
-        with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-            text = f.read()
-    except Exception as exc:
-        log.error("Failed to read file '%s': %s", abs_path, exc)
-        return []
-
     splitter = MarkdownTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -435,6 +446,16 @@ def main() -> None:
         help="Re-embed and re-insert files that are already in the DB (delete old records first).",
     )
     parser.add_argument(
+        "--normalize",
+        action="store_true",
+        help="Normalize text (removes non-printing characters, collapses multi-newlines).",
+    )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Preview normalization diffs for the first 5 markdown files without actual ingestion.",
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Verbose (debug) logging.",
@@ -453,18 +474,53 @@ def main() -> None:
     # --- 1. Discover files ---
     files = discover_md_files(directory, recursive=not args.no_recursive)
     log.info("Found %d markdown file(s) in '%s'.", len(files), directory)
-    log.info("Using Qdrant: %s (Collection: %s)", args.qdrant_url, args.collection)
     
     if not files:
         log.warning("No .md files found. Exiting.")
         sys.exit(0)
+
+    # --- 2. Normalization Preview Mode ---
+    if args.preview:
+        log.info("=== Normalization Preview (First 5 Files) ===")
+        for f in files[:5]:
+            rel = os.path.relpath(f, directory)
+            try:
+                with open(f, "r", encoding="utf-8", errors="replace") as file_obj:
+                    orig = file_obj.read()
+            except Exception as exc:
+                log.error("Failed to read '%s': %s", rel, exc)
+                continue
+
+            norm = normalize_text(orig)
+            
+            print(f"\n" + "="*80)
+            print(f"File: {rel}")
+            print("="*80)
+            
+            diff = list(difflib.unified_diff(
+                orig.splitlines(keepends=True),
+                norm.splitlines(keepends=True),
+                fromfile='Original',
+                tofile='Normalized (with --normalize)',
+                n=3
+            ))
+            
+            if diff:
+                print("".join(diff))
+            else:
+                print("No normalization changes detected. Showing first 10 lines of content:")
+                print("".join(norm.splitlines(keepends=True)[:10]))
+        log.info("Preview finished. Exiting without database ingestion.")
+        sys.exit(0)
+
+    log.info("Using Qdrant: %s (Collection: %s)", args.qdrant_url, args.collection)
 
     # Initialize Qdrant client
     client = QdrantClient(url=args.qdrant_url, api_key=args.qdrant_api_key)
 
     collection_ensured = False
 
-    # --- 2. Process in batches of documents ---
+    # --- 3. Process in batches of documents ---
     doc_batch_size = args.doc_batch_size
     total_files = len(files)
     total_inserted = 0
@@ -480,15 +536,29 @@ def main() -> None:
         log.info("--- Batch %d/%d (Files %d-%d of %d) ---", 
                  batch_num, total_batches, i+1, min(i+doc_batch_size, total_files), total_files)
         
-        # a. Idempotency check: compute relative paths and current hashes for this batch
-        batch_rel_paths = [os.path.relpath(f, directory) for f in batch_files]
-        batch_hashes = {os.path.relpath(f, directory): get_file_hash(f) for f in batch_files}
-        
+        # a. Read contents, apply optional normalization, and compute relative paths and hashes
+        batch_contents: dict[str, str] = {}
+        batch_hashes: dict[str, str] = {}
+        for f in batch_files:
+            rel = os.path.relpath(f, directory)
+            try:
+                with open(f, "r", encoding="utf-8", errors="replace") as file_obj:
+                    content = file_obj.read()
+            except Exception as exc:
+                log.error("Failed to read file '%s': %s", f, exc)
+                continue
+            
+            if args.normalize:
+                content = normalize_text(content)
+                
+            batch_contents[rel] = content
+            batch_hashes[rel] = hashlib.sha256(content.encode('utf-8', errors='replace')).hexdigest()
+
         indexed_file_hashes: dict[str, str] = {}
         if not args.dry_run:
             try:
                 indexed_file_hashes = qdrant_get_indexed_paths(
-                    client, args.collection, filter_paths=batch_rel_paths
+                    client, args.collection, filter_paths=list(batch_hashes.keys())
                 )
             except Exception as exc:
                 log.warning("Could not query existing hashes for batch (will process all): %s", exc)
@@ -498,6 +568,8 @@ def main() -> None:
 
         for f in batch_files:
             rel = os.path.relpath(f, directory)
+            if rel not in batch_hashes:
+                continue
             current_hash = batch_hashes[rel]
             exists_in_db = rel in indexed_file_hashes
             stored_hash = indexed_file_hashes.get(rel)
@@ -537,10 +609,11 @@ def main() -> None:
         if not args.dry_run and paths_to_evict_this_batch:
             qdrant_delete_by_paths(client, args.collection, paths_to_evict_this_batch)
 
-        # b. Read + chunk
+        # b. Chunk the pre-read and normalized text
         batch_chunks: list[Chunk] = []
         for abs_path, rel_path, f_hash in files_to_process_this_batch:
-            chunks = chunk_markdown_file(rel_path, abs_path, f_hash, args.chunk_size, args.chunk_overlap)
+            text = batch_contents[rel_path]
+            chunks = chunk_markdown_text(rel_path, text, f_hash, args.chunk_size, args.chunk_overlap)
             batch_chunks.extend(chunks)
             log.info("File '%s' → %d chunk(s)", rel_path, len(chunks))
 

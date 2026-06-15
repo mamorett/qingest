@@ -57,6 +57,8 @@ Create a `.env` file (see `.env.example`) to store your defaults. CLI flags alwa
 | `--chunk-overlap` | Overlap between chunks (characters). | `200` |
 | `--force`, `-f` | Re-embed all files, even if unchanged. | — |
 | `--create-collection` | Auto-create collection and setup payload indexes. | — |
+| `--normalize` | Normalize text (removes non-printing characters, standardizes carriage returns, and collapses multi-newlines). | — |
+| `--preview` | Preview normalization changes for the first 5 markdown files without actual ingestion. | — |
 | `--dry-run` | Run everything but do NOT write to Qdrant. | — |
 
 ---
@@ -79,6 +81,12 @@ python qingest.py --dir ./docs
 Overwrite everything in the database:
 ```bash
 python qingest.py --dir ./docs --force
+```
+
+### 4. Normalization Preview
+Preview how normalization affects your documents without performing actual vector ingestion:
+```bash
+python qingest.py --dir ./docs --normalize --preview
 ```
 
 ---
