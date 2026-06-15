@@ -284,6 +284,7 @@ def qdrant_get_indexed_paths(
     if not filter_paths:
         return {}
 
+    log.info("🔍 Querying Qdrant for indexed paths of files: %s", filter_paths)
     path_hashes: dict[str, str] = {}
     try:
         # Scroll points matching the filter_paths in batches using pagination
@@ -299,7 +300,7 @@ def qdrant_get_indexed_paths(
                         )
                     ]
                 ),
-                limit=1000,
+                limit=100,
                 with_payload=["file_path", "file_hash"],
                 with_vectors=False,
                 offset=offset,
@@ -313,6 +314,7 @@ def qdrant_get_indexed_paths(
             
             if offset is None:
                 break
+        log.info("🔍 Qdrant returned indexed hashes for files: %s", list(path_hashes.keys()))
     except Exception as exc:
         log.warning("Failed to query indexed paths from Qdrant collection '%s': %s", collection, exc)
 
