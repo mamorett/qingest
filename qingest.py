@@ -293,6 +293,12 @@ def qdrant_store_embeddings(
     now = datetime.now(timezone.utc)
     points = []
     
+    if embeddings:
+        dims = [len(e) for e in embeddings]
+        unique_dims = set(dims)
+        log.info("Preparing to upsert %d points to collection '%s' with vector dimensions: %s (min: %d, max: %d)",
+                 len(embeddings), collection, unique_dims, min(dims), max(dims))
+    
     for chunk, emb in zip(chunks, embeddings):
         if dry_run:
             log.info("[DRY-RUN] Would insert chunk from %s (idx %d, %d dims)",
@@ -319,6 +325,9 @@ def qdrant_store_embeddings(
         count = len(points)
     except Exception as exc:
         log.error("Failed to upsert chunks to Qdrant collection '%s': %s", collection, exc)
+        if hasattr(exc, "content"):
+            log.error("Response content: %s", exc.content)
+        raise
         
     return count
 
