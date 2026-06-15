@@ -481,8 +481,9 @@ def main() -> None:
 
     # --- 2. Normalization Preview Mode ---
     if args.preview:
-        log.info("=== Normalization Preview (First 5 Files) ===")
-        for f in files[:5]:
+        preview_limit = 10
+        log.info("=== Normalization Preview (First %d Files) ===", preview_limit)
+        for f in files[:preview_limit]:
             rel = os.path.relpath(f, directory)
             try:
                 with open(f, "r", encoding="utf-8", errors="replace") as file_obj:
@@ -492,24 +493,35 @@ def main() -> None:
                 continue
 
             norm = normalize_text(orig)
-            
+            orig_lines = orig.splitlines()
+            norm_lines = norm.splitlines()
+            orig_empty = sum(1 for line in orig_lines if not line.strip())
+            norm_empty = sum(1 for line in norm_lines if not line.strip())
+
             print(f"\n" + "="*80)
             print(f"File: {rel}")
+            print(f"Stats:")
+            print(f"  Characters: {len(orig)} -> {len(norm)} (delta: {len(norm) - len(orig)})")
+            print(f"  Total Lines: {len(orig_lines)} -> {len(norm_lines)} (delta: {len(norm_lines) - len(orig_lines)})")
+            print(f"  Empty Lines: {orig_empty} -> {norm_empty} (delta: {norm_empty - orig_empty})")
             print("="*80)
             
             diff = list(difflib.unified_diff(
                 orig.splitlines(keepends=True),
                 norm.splitlines(keepends=True),
                 fromfile='Original',
-                tofile='Normalized (with --normalize)',
-                n=3
+                tofile='Normalized',
+                n=10
             ))
             
             if diff:
+                print("Changes made by normalization:")
                 print("".join(diff))
-            else:
-                print("No normalization changes detected. Showing first 10 lines of content:")
-                print("".join(norm.splitlines(keepends=True)[:10]))
+                print("-" * 80)
+            
+            print("Normalized Content Preview (First 50 Lines):")
+            print("".join(norm.splitlines(keepends=True)[:50]))
+            print("="*80)
         log.info("Preview finished. Exiting without database ingestion.")
         sys.exit(0)
 
