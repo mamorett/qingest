@@ -312,7 +312,7 @@ def qdrant_get_indexed_paths(
                 if fp:
                     path_hashes[fp] = fh if fh else "__legacy__"
             
-            if offset is None:
+            if not points or offset is None:
                 break
         log.info("🔍 Qdrant returned indexed hashes for files: %s", list(path_hashes.keys()))
     except Exception as exc:
