@@ -94,7 +94,7 @@ class Chunk:
 # ---------------------------------------------------------------------------
 
 def normalize_text(text: str) -> str:
-    """Normalize text by removing non-printing characters and collapsing redundant empty lines."""
+    """Normalize text by removing non-printing characters, collapsing newlines, and repairing broken lines."""
     # Remove BOM if present
     text = text.lstrip('\ufeff')
     
@@ -104,7 +104,57 @@ def normalize_text(text: str) -> str:
     # Remove control characters (ASCII 0-31 except tab \t (9) and newline \n (10), plus DEL 127)
     text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
     
-    # Collapse 3 or more consecutive newlines (with optional whitespace in between) to exactly two newlines
+    # Repair broken paragraph/line spacing
+    lines = text.split('\n')
+    output = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        # If the current line is empty, see if we should join previous and next line
+        if not line:
+            if output and i + 1 < len(lines):
+                prev_line = output[-1].strip()
+                next_line = lines[i+1].strip()
+                
+                if prev_line and next_line:
+                    is_prev_md = prev_line.startswith(('#', '-', '*', '>', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.'))
+                    is_next_md = next_line.startswith(('#', '-', '*', '>', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.'))
+                    
+                    ends_with_terminator = prev_line[-1] in ('.', '!', '?', ':', ';') if prev_line else False
+                    starts_with_lowercase = next_line[0].islower() if next_line else False
+                    
+                    if not is_prev_md and not is_next_md:
+                        if not ends_with_terminator or starts_with_lowercase:
+                            output[-1] = prev_line + " " + next_line
+                            i += 2
+                            continue
+            
+            output.append(lines[i])
+            i += 1
+        else:
+            # If the current line has text, check if it should be joined with the previous line (repairing single newline wraps)
+            if output and output[-1].strip():
+                prev_line = output[-1].strip()
+                is_prev_md = prev_line.startswith(('#', '-', '*', '>', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.'))
+                is_curr_md = line.startswith(('#', '-', '*', '>', '1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.'))
+                
+                ends_with_terminator = prev_line[-1] in ('.', '!', '?', ':', ';') if prev_line else False
+                starts_with_lowercase = line[0].islower() if line else False
+                
+                if not is_prev_md and not is_curr_md:
+                    if not ends_with_terminator or starts_with_lowercase:
+                        output[-1] = prev_line + " " + line
+                        i += 1
+                        continue
+            
+            output.append(lines[i])
+            i += 1
+            
+    # Reconstruct text
+    text = '\n'.join(output)
+    
+    # Finally, collapse 3 or more consecutive newlines to exactly two newlines
     text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
     
     return text
