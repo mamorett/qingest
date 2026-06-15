@@ -75,18 +75,18 @@ def main():
     print(f"Searching Qdrant collection '{args.collection}' at {args.qdrant_url}...")
     try:
         client = QdrantClient(url=args.qdrant_url, api_key=args.qdrant_api_key)
-        results = client.search(
+        results = client.query_points(
             collection_name=args.collection,
-            query_vector=query_vector,
+            query=query_vector,
             limit=args.limit,
         )
         
-        if not results:
+        if not results or not results.points:
             print("No matching results found.")
             return
 
-        print(f"\nFound {len(results)} matches:\n" + "="*80)
-        for i, res in enumerate(results):
+        print(f"\nFound {len(results.points)} matches:\n" + "="*80)
+        for i, res in enumerate(results.points):
             payload = res.payload or {}
             score = res.score
             fp = payload.get("file_path", "unknown")

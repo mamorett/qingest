@@ -134,13 +134,13 @@ from qdrant_client import QdrantClient
 client = QdrantClient("http://localhost:6333")
 
 # Find the 5 most relevant chunks for a given query vector
-results = client.search(
+results = client.query_points(
     collection_name="mdchunk",
-    query_vector=[0.12, -0.05, 0.88, ...],  # replace with actual embedding vector
+    query=[0.12, -0.05, 0.88, ...],  # replace with actual embedding vector
     limit=5
 )
 
-for result in results:
+for result in results.points:
     print(f"Source: {result.payload['file_path']}")
     print(f"Content: {result.payload['content']}\n---")
 ```
