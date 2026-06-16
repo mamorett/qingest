@@ -36,6 +36,7 @@ Usage examples
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import difflib
 import hashlib
 import json
@@ -314,6 +315,98 @@ def qdrant_get_indexed_paths(
     return path_hashes
 
 
+def qdrant_get_all_indexed_hashes(
+    client: QdrantClient,
+    collection: str,
+    file_paths: list[str],
+    batch_size: int = 500,
+) -> dict[str, str]:
+    """Retrieve indexed file paths and their hashes from Qdrant in large batches."""
+    path_hashes: dict[str, str] = {}
+    if not file_paths:
+        return path_hashes
+
+    total_paths = len(file_paths)
+    log.info("Querying Qdrant for %d indexed file paths to find already embedded documents...", total_paths)
+    
+    total_batches = (total_paths + batch_size - 1) // batch_size
+    # Query in batches of batch_size (e.g. 500)
+    for i in range(0, total_paths, batch_size):
+        batch = file_paths[i : i + batch_size]
+        batch_num = (i // batch_size) + 1
+        log.info("Querying DB hashes batch %d/%d (paths %d–%d)...", 
+                 batch_num, total_batches, i + 1, min(i + batch_size, total_paths))
+        try:
+            points, _ = client.scroll(
+                collection_name=collection,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="file_path",
+                            match=MatchAny(any=batch),
+                        )
+                    ]
+                ),
+                limit=10000,
+                with_payload=["file_path", "file_hash"],
+                with_vectors=False,
+            )
+            for point in points:
+                payload = point.payload or {}
+                fp = payload.get("file_path")
+                fh = payload.get("file_hash")
+                if fp:
+                    # Keep the hash, prefer non-legacy if duplicates exist
+                    current = path_hashes.get(fp)
+                    if not current or current == "__legacy__":
+                        path_hashes[fp] = fh if fh else "__legacy__"
+        except Exception as exc:
+            log.warning("Failed to query indexed paths from Qdrant (batch %d-%d): %s", i+1, min(i+batch_size, total_paths), exc)
+            
+    log.info("Retrieved %d unique indexed file path(s) from Qdrant.", len(path_hashes))
+    return path_hashes
+
+
+def check_file_needs_processing(
+    f: str,
+    directory: str,
+    normalize: bool,
+    force: bool,
+    all_indexed_file_hashes: dict[str, str],
+) -> Optional[tuple[str, str, Optional[str], bool, str]]:
+    """Determine if a file needs to be indexed, returning metadata and the decision."""
+    rel = os.path.relpath(f, directory)
+    
+    exists_in_db = rel in all_indexed_file_hashes
+    if not exists_in_db:
+        return (f, rel, None, True, "New file")
+        
+    if force:
+        return (f, rel, None, True, "Force replace (--force)")
+        
+    stored_hash = all_indexed_file_hashes.get(rel)
+    if stored_hash == "__legacy__":
+        # Already in DB but predates hash tracking - skip unless --force
+        return (f, rel, None, False, "Legacy record (skipped)")
+        
+    try:
+        with open(f, "r", encoding="utf-8", errors="replace") as file_obj:
+            content = file_obj.read()
+    except Exception as exc:
+        log.error("Failed to read file '%s': %s", f, exc)
+        return None
+        
+    if normalize:
+        content = normalize_text(content)
+        
+    h = hashlib.sha256(content.encode('utf-8', errors='replace')).hexdigest()
+    
+    if stored_hash != h:
+        return (f, rel, h, True, f"Modified (hash mismatch: stored={stored_hash}, current={h})")
+    else:
+        return (f, rel, h, False, "Identical (hash match)")
+
+
 def qdrant_delete_by_paths(
     client: QdrantClient,
     collection: str,
@@ -582,145 +675,136 @@ def main() -> None:
 
     collection_ensured = False
 
-    # --- 3. Process in batches of documents ---
-    doc_batch_size = args.doc_batch_size
+    # --- 3. Check which files need processing ---
     total_files = len(files)
-    total_inserted = 0
+    all_indexed_file_hashes: dict[str, str] = {}
+    if not args.dry_run:
+        rel_paths = [os.path.relpath(f, directory) for f in files]
+        try:
+            all_indexed_file_hashes = qdrant_get_all_indexed_hashes(
+                client, args.collection, rel_paths
+            )
+        except Exception as exc:
+            log.warning("Could not query existing hashes from Qdrant: %s", exc)
+
+    files_to_process: list[tuple[str, str, Optional[str]]] = [] # (abs, rel, hash)
     total_skipped = 0
 
-    log.info("Processing %d files in batches of %d documents.", total_files, doc_batch_size)
-
-    for i in range(0, total_files, doc_batch_size):
-        batch_files = files[i : i + doc_batch_size]
-        batch_num = (i // doc_batch_size) + 1
-        total_batches = (total_files + doc_batch_size - 1) // doc_batch_size
+    log.info("Checking which files need to be processed (using up to 8 threads)...")
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        results = executor.map(
+            lambda f: check_file_needs_processing(f, directory, args.normalize, args.force, all_indexed_file_hashes),
+            files
+        )
         
-        log.info("--- Batch %d/%d (Files %d-%d of %d) ---", 
-                 batch_num, total_batches, i+1, min(i+doc_batch_size, total_files), total_files)
-        
-        # a. Read contents, apply optional normalization, and compute relative paths and hashes
-        batch_contents: dict[str, str] = {}
-        batch_hashes: dict[str, str] = {}
-        for f in batch_files:
-            rel = os.path.relpath(f, directory)
-            try:
-                with open(f, "r", encoding="utf-8", errors="replace") as file_obj:
-                    content = file_obj.read()
-            except Exception as exc:
-                log.error("Failed to read file '%s': %s", f, exc)
+        for res in results:
+            if res is None:
                 continue
-            
-            if args.normalize:
-                content = normalize_text(content)
-                
-            batch_contents[rel] = content
-            batch_hashes[rel] = hashlib.sha256(content.encode('utf-8', errors='replace')).hexdigest()
-
-        indexed_file_hashes: dict[str, str] = {}
-        if not args.dry_run:
-            try:
-                indexed_file_hashes = qdrant_get_indexed_paths(
-                    client, args.collection, filter_paths=list(batch_hashes.keys())
-                )
-            except Exception as exc:
-                log.warning("Could not query existing hashes for batch (will process all): %s", exc)
-
-        files_to_process_this_batch: list[tuple[str, str, str]] = [] # (abs, rel, hash)
-
-        for f in batch_files:
-            rel = os.path.relpath(f, directory)
-            if rel not in batch_hashes:
-                continue
-            current_hash = batch_hashes[rel]
-            exists_in_db = rel in indexed_file_hashes
-            stored_hash = indexed_file_hashes.get(rel)
-
-            if exists_in_db:
-                log.info("🔍 DB check: '%s' | Stored Hash: %s | Current Hash: %s | Match: %s", 
-                         rel, stored_hash, current_hash, stored_hash == current_hash)
-            else:
-                log.info("🔍 DB check: '%s' | Not found in collection", rel)
-
-            should_process = False
-            reason = ""
-
-            if not exists_in_db:
-                should_process = True
-                reason = "New file"
-            elif args.force:
-                should_process = True
-                reason = "Force replace (--force)"
-            elif stored_hash == "__legacy__":
-                # Already in DB but predates hash tracking — skip unless --force
-                log.info("⏭️  %s: Already indexed (legacy record). Skipping.", rel)
-                should_process = False
-            elif stored_hash != current_hash:
-                should_process = True
-                reason = f"Modified (hash mismatch: stored={stored_hash}, current={current_hash})"
-            else:
-                log.info("⏭️  %s: Identical (hash match). Skipping.", rel)
-                should_process = False
-
+            abs_path, rel_path, f_hash, should_process, reason = res
             if should_process:
-                log.info("🚀 Stage for ingestion: %s (%s)", rel, reason)
-                files_to_process_this_batch.append((f, rel, current_hash))
+                log.debug("🚀 Stage for ingestion: %s (%s)", rel_path, reason)
+                files_to_process.append((abs_path, rel_path, f_hash))
             else:
+                log.debug("Skip: %s (%s)", rel_path, reason)
                 total_skipped += 1
 
-        if not files_to_process_this_batch:
-            log.info("No files to update in this batch.")
-            continue
+    total_to_process = len(files_to_process)
+    total_inserted = 0
 
-        if not args.dry_run:
-            paths_to_delete = {rel for _, rel, _ in files_to_process_this_batch}
-            if paths_to_delete:
-                log.info("Cleaning old points from collection for: %s", paths_to_delete)
-                qdrant_delete_by_paths(client, args.collection, paths_to_delete)
+    if total_to_process == 0:
+        log.info("All files are up-to-date. Nothing to ingest.")
+    else:
+        log.info("Processing %d files (out of %d total discovered, skipped %d) in batches of %d documents.", 
+                 total_to_process, total_files, total_skipped, args.doc_batch_size)
 
-        # b. Chunk the pre-read and normalized text
-        batch_chunks: list[Chunk] = []
-        for abs_path, rel_path, f_hash in files_to_process_this_batch:
-            text = batch_contents[rel_path]
-            chunks = chunk_markdown_text(rel_path, text, f_hash, args.chunk_size, args.chunk_overlap)
-            batch_chunks.extend(chunks)
-            log.info("File '%s' → %d chunk(s)", rel_path, len(chunks))
+        # --- 4. Process in batches of documents ---
+        doc_batch_size = args.doc_batch_size
+        for i in range(0, total_to_process, doc_batch_size):
+            batch_items = files_to_process[i : i + doc_batch_size]
+            batch_num = (i // doc_batch_size) + 1
+            total_batches = (total_to_process + doc_batch_size - 1) // doc_batch_size
+            
+            log.info("--- Ingestion Batch %d/%d (Files %d-%d of %d) ---", 
+                     batch_num, total_batches, i+1, min(i+doc_batch_size, total_to_process), total_to_process)
+            
+            # a. Read contents, apply optional normalization, and compute relative paths and hashes
+            batch_contents: dict[str, str] = {}
+            batch_hashes: dict[str, str] = {}
+            paths_to_delete: set[str] = set()
+            for abs_path, rel_path, f_hash in batch_items:
+                log.info("Processing file: %s", rel_path)
+                try:
+                    with open(abs_path, "r", encoding="utf-8", errors="replace") as file_obj:
+                        content = file_obj.read()
+                except Exception as exc:
+                    log.error("Failed to read file '%s': %s", abs_path, exc)
+                    continue
+                
+                if args.normalize:
+                    content = normalize_text(content)
+                    
+                batch_contents[rel_path] = content
+                if f_hash is None:
+                    f_hash = hashlib.sha256(content.encode('utf-8', errors='replace')).hexdigest()
+                batch_hashes[rel_path] = f_hash
+                paths_to_delete.add(rel_path)
 
-        if not batch_chunks:
-            continue
+            if not batch_contents:
+                continue
 
-        # c. Embed
-        log.info("Embedding %d chunks...", len(batch_chunks))
-        texts = [c.content for c in batch_chunks]
-        try:
-            embeddings = _embed_batch(texts, args.embed_url, args.embed_model, args.batch_size)
-        except Exception as exc:
-            log.error("Embedding failed for batch %d: %s", batch_num, exc)
-            continue
+            if not args.dry_run:
+                if paths_to_delete:
+                    log.info("Cleaning old points from collection for: %s", paths_to_delete)
+                    qdrant_delete_by_paths(client, args.collection, paths_to_delete)
 
-        # d. Ensure collection schema (once, after we know vector dim)
-        if args.create_collection and not collection_ensured:
-            vector_dim = len(embeddings[0])
+            # b. Chunk the pre-read and normalized text
+            batch_chunks: list[Chunk] = []
+            for abs_path, rel_path, _ in batch_items:
+                if rel_path not in batch_contents:
+                    continue
+                text = batch_contents[rel_path]
+                f_hash = batch_hashes[rel_path]
+                chunks = chunk_markdown_text(rel_path, text, f_hash, args.chunk_size, args.chunk_overlap)
+                batch_chunks.extend(chunks)
+                log.info("File '%s' → %d chunk(s)", rel_path, len(chunks))
+
+            if not batch_chunks:
+                continue
+
+            # c. Embed
+            log.info("Embedding %d chunks...", len(batch_chunks))
+            texts = [c.content for c in batch_chunks]
             try:
-                qdrant_create_collection_if_not_exists(client, args.collection, vector_dim)
-                collection_ensured = True
+                embeddings = _embed_batch(texts, args.embed_url, args.embed_model, args.batch_size)
             except Exception as exc:
-                log.error("Failed to create Qdrant collection: %s", exc)
-                sys.exit(1)
+                log.error("Embedding failed for batch %d: %s", batch_num, exc)
+                continue
 
-        # e. Store
-        if not args.dry_run:
-            inserted = qdrant_store_embeddings(
-                client, args.collection, batch_chunks, embeddings,
-                dry_run=False,
-            )
-            total_inserted += inserted
-            log.info("Batch %d: Inserted %d record(s).", batch_num, inserted)
-        else:
-            qdrant_store_embeddings(
-                client, args.collection, batch_chunks, embeddings,
-                dry_run=True,
-            )
-            log.info("Batch %d: Dry-run complete.", batch_num)
+            # d. Ensure collection schema (once, after we know vector dim)
+            if args.create_collection and not collection_ensured:
+                vector_dim = len(embeddings[0])
+                try:
+                    qdrant_create_collection_if_not_exists(client, args.collection, vector_dim)
+                    collection_ensured = True
+                except Exception as exc:
+                    log.error("Failed to create Qdrant collection: %s", exc)
+                    sys.exit(1)
+
+            # e. Store
+            if not args.dry_run:
+                inserted = qdrant_store_embeddings(
+                    client, args.collection, batch_chunks, embeddings,
+                    dry_run=False,
+                )
+                total_inserted += inserted
+                log.info("Batch %d: Inserted %d record(s).", batch_num, inserted)
+            else:
+                qdrant_store_embeddings(
+                    client, args.collection, batch_chunks, embeddings,
+                    dry_run=True,
+                )
+                log.info("Batch %d: Dry-run complete.", batch_num)
 
     if not args.dry_run:
         log.info("Total inserted: %d record(s), skipped: %d file(s).",
