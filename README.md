@@ -131,7 +131,17 @@ python query_qdrant.py "How do I configure the server?"
 python query_qdrant.py "How do I configure the server?" \
     --qdrant-url http://parma.sodalitas.net:6333 \
     --collection fffprose
+
+# Filter out low-quality matches with a score threshold
+python query_qdrant.py "How do I configure the server?" \
+    --score-threshold 0.5 \
+    --limit 10
 ```
+
+| Flag | Description | Default |
+|:---|:---|:---|
+| `--limit` | Maximum number of results to return. | `5` |
+| `--score-threshold` | Minimum cosine similarity (0.0–1.0). Results below this are discarded. | `0.3` |
 
 ### 2. Programmatically
 You can perform similarity search queries programmatically using the Qdrant client:
@@ -145,7 +155,8 @@ client = QdrantClient("http://localhost:6333")
 results = client.query_points(
     collection_name="mdchunk",
     query=[0.12, -0.05, 0.88, ...],  # replace with actual embedding vector
-    limit=5
+    limit=5,
+    score_threshold=0.3,
 )
 
 for result in results.points:

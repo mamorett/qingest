@@ -53,6 +53,12 @@ def main():
         default=5,
         help="Number of results to return.",
     )
+    parser.add_argument(
+        "--score-threshold",
+        type=float,
+        default=0.3,
+        help="Minimum similarity score (0.0-1.0). Lower scores are discarded.",
+    )
 
     args = parser.parse_args()
 
@@ -85,8 +91,22 @@ def main():
             print("No matching results found.")
             return
 
-        print(f"\nFound {len(results.points)} matches:\n" + "="*80)
-        for i, res in enumerate(results.points):
+        # Filter by score threshold client-side to report discard count
+        threshold = args.score_threshold
+        below = [p for p in results.points if p.score < threshold]
+        above = [p for p in results.points if p.score >= threshold]
+
+        if below:
+            print(f"\n{len(below)} result(s) discarded (score < {threshold}):")
+            for p in below:
+                print(f"  Score {p.score:.4f} | {p.payload.get('file_path', 'unknown') if p.payload else 'unknown'}")
+
+        if not above:
+            print(f"\nNo results above score threshold ({threshold}).")
+            return
+
+        print(f"\n{len(above)} match(es) above threshold:\n" + "="*80)
+        for i, res in enumerate(above):
             payload = res.payload or {}
             score = res.score
             fp = payload.get("file_path", "unknown")
