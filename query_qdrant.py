@@ -7,6 +7,9 @@ It embeds the query using the same embedding server and retrieves the most relev
 
 Usage:
   python query_qdrant.py "how do I configure the server?"
+
+  # Perform a hybrid search
+  python query_qdrant.py "how do I configure the server?" --hybrid
 """
 
 import os
@@ -15,6 +18,7 @@ import argparse
 import requests
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
+from qdrant_client.models import Prefetch, FusionQuery, Fusion
 
 # Load .env configurations
 load_dotenv()
@@ -48,10 +52,21 @@ def main():
         help="Embedding model name.",
     )
     parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Enable hybrid retrieval (requires the collection to have named vectors 'dense' and 'sparse').",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=5,
         help="Number of results to return.",
+    )
+    parser.add_argument(
+        "--score-threshold",
+        type=float,
+        default=0.3,
+        help="Minimum similarity score (0.0-1.0). Lower scores are discarded.",
     )
 
     args = parser.parse_args()
@@ -72,21 +87,51 @@ def main():
         sys.exit(1)
 
     # 2. Search Qdrant
-    print(f"Searching Qdrant collection '{args.collection}' at {args.qdrant_url}...")
+    print(f"Searching Qdrant collection '{args.collection}' at {args.qdrant_url} (hybrid={args.hybrid})...")
     try:
         client = QdrantClient(url=args.qdrant_url, api_key=args.qdrant_api_key)
-        results = client.query_points(
-            collection_name=args.collection,
-            query=query_vector,
-            limit=args.limit,
-        )
+        
+        if args.hybrid:
+            # Note: For true hybrid, you need a sparse vector (BM25/SPLADE).
+            # If your embedding API doesn't return one, you can compute it client-side.
+            # Here we provide the structure for RRF fusion.
+            # If sparse_vector is empty, it relies primarily on dense + RRF.
+            results = client.query_points(
+                collection_name=args.collection,
+                prefetch=[
+                    Prefetch(query=query_vector, using="dense", limit=args.limit * 2),
+                    # Prefetch(query=sparse_vector, using="sparse", limit=args.limit * 2), # Uncomment when sparse is available
+                ],
+                query=FusionQuery(fusion=Fusion.RRF),
+                limit=args.limit,
+            )
+        else:
+            results = client.query_points(
+                collection_name=args.collection,
+                query=query_vector,
+                limit=args.limit,
+            )
         
         if not results or not results.points:
             print("No matching results found.")
             return
 
-        print(f"\nFound {len(results.points)} matches:\n" + "="*80)
-        for i, res in enumerate(results.points):
+        # Filter by score threshold client-side to report discard count
+        threshold = args.score_threshold
+        below = [p for p in results.points if p.score < threshold]
+        above = [p for p in results.points if p.score >= threshold]
+
+        if below:
+            print(f"\n{len(below)} result(s) discarded (score < {threshold}):")
+            for p in below:
+                print(f"  Score {p.score:.4f} | {p.payload.get('file_path', 'unknown') if p.payload else 'unknown'}")
+
+        if not above:
+            print(f"\nNo results above score threshold ({threshold}).")
+            return
+
+        print(f"\n{len(above)} match(es) above threshold:\n" + "="*80)
+        for i, res in enumerate(above):
             payload = res.payload or {}
             score = res.score
             fp = payload.get("file_path", "unknown")
