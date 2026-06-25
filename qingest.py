@@ -31,6 +31,9 @@ Usage examples
 
   # Preview normalization without embedding anything
   python qingest.py --dir ./docs --normalize --preview
+
+  # Setup collection for hybrid search (dense + sparse)
+  python qingest.py --dir ./docs --create-collection --hybrid
 """
 
 from __future__ import annotations
@@ -54,7 +57,9 @@ from dotenv import load_dotenv
 
 import requests
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchAny, PayloadSchemaType
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchAny, PayloadSchemaType, SparseVectorParams, SparseVector
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # LangChain imports for advanced chunking
 from langchain_text_splitters import MarkdownTextSplitter
@@ -165,6 +170,12 @@ def normalize_text(text: str) -> str:
 # Chunking logic
 # ---------------------------------------------------------------------------
 
+def extract_heading(text: str) -> str:
+    for line in text.splitlines():
+        if re.match(r'^#{1,6}\s+', line):
+            return line.strip()
+    return ""
+
 def chunk_markdown_text(
     file_path: str,
     text: str,
@@ -190,6 +201,10 @@ def chunk_markdown_text(
             metadata={
                 "source_file": file_path,
                 "total_chunks": len(st_chunks),
+                "chunk_index": i,
+                "heading_context": extract_heading(chunk_text),
+                "char_count": len(chunk_text),
+                "word_count": len(chunk_text.split()),
             },
         )
         for i, chunk_text in enumerate(st_chunks)
@@ -215,6 +230,11 @@ def _embed_batch(
     Returns a list of embedding vectors, one per input text.
     """
     all_embeddings: list[list[float]] = []
+    
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=1.0, status_forcelist=[429, 500, 502, 503, 504])
+    session.mount("http://", HTTPAdapter(max_retries=retries))
+    session.mount("https://", HTTPAdapter(max_retries=retries))
 
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
@@ -230,7 +250,7 @@ def _embed_batch(
             "input": batch,
         }
 
-        resp = requests.post(
+        resp = session.post(
             f"{embed_url}/embeddings",
             json=payload,
             timeout=300,
@@ -253,22 +273,30 @@ def qdrant_create_collection_if_not_exists(
     client: QdrantClient,
     collection: str,
     vector_dim: int,
+    hybrid: bool = False,
 ) -> None:
     """Create collection if it doesn't already exist and add payload index."""
     try:
         if not client.collection_exists(collection_name=collection):
-            log.info("Creating collection '%s' (vector dim=%d).", collection, vector_dim)
-            client.create_collection(
-                collection_name=collection,
-                vectors_config=VectorParams(size=vector_dim, distance=Distance.COSINE),
-            )
-            # Create index on file_path for fast filtering/scrolling
-            client.create_payload_index(
-                collection_name=collection,
-                field_name="file_path",
-                field_schema=PayloadSchemaType.KEYWORD,
-            )
-            log.info("Collection '%s' created and payload index ensured.", collection)
+            log.info("Creating collection '%s' (vector dim=%d, hybrid=%s).", collection, vector_dim, hybrid)
+            if hybrid:
+                client.create_collection(
+                    collection_name=collection,
+                    vectors_config={"dense": VectorParams(size=vector_dim, distance=Distance.COSINE)},
+                    sparse_vectors_config={"sparse": SparseVectorParams()},
+                )
+            else:
+                client.create_collection(
+                    collection_name=collection,
+                    vectors_config=VectorParams(size=vector_dim, distance=Distance.COSINE),
+                )
+            
+            client.create_payload_index(collection_name=collection, field_name="file_path", field_schema=PayloadSchemaType.KEYWORD)
+            client.create_payload_index(collection_name=collection, field_name="content", field_schema=PayloadSchemaType.TEXT)
+            client.create_payload_index(collection_name=collection, field_name="chunk_index", field_schema=PayloadSchemaType.INTEGER)
+            client.create_payload_index(collection_name=collection, field_name="indexed_at", field_schema=PayloadSchemaType.KEYWORD)
+            
+            log.info("Collection '%s' created and payload indexes ensured.", collection)
         else:
             log.info("Collection '%s' already exists.", collection)
     except Exception as exc:
@@ -288,26 +316,32 @@ def qdrant_get_indexed_paths(
     path_hashes: dict[str, str] = {}
     try:
         # Scroll points matching the filter_paths in a single batch with a high limit
-        points, _ = client.scroll(
-            collection_name=collection,
-            scroll_filter=Filter(
-                must=[
-                    FieldCondition(
-                        key="file_path",
-                        match=MatchAny(any=filter_paths),
-                    )
-                ]
-            ),
-            limit=10000,
-            with_payload=["file_path", "file_hash"],
-            with_vectors=False,
-        )
-        for point in points:
-            payload = point.payload or {}
-            fp = payload.get("file_path")
-            fh = payload.get("file_hash")
-            if fp:
-                path_hashes[fp] = fh if fh else "__legacy__"
+        offset = None
+        while True:
+            points, offset = client.scroll(
+                collection_name=collection,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="file_path",
+                            match=MatchAny(any=filter_paths),
+                        )
+                    ]
+                ),
+                limit=10000,
+                offset=offset,
+                with_payload=["file_path", "file_hash"],
+                with_vectors=False,
+            )
+            for point in points:
+                payload = point.payload or {}
+                fp = payload.get("file_path")
+                fh = payload.get("file_hash")
+                if fp:
+                    path_hashes[fp] = fh if fh else "__legacy__"
+            if offset is None:
+                break
+        return path_hashes
     except Exception as exc:
         log.warning("Failed to query indexed paths from Qdrant collection '%s': %s", collection, exc)
 
@@ -337,29 +371,33 @@ def qdrant_get_all_indexed_hashes(
         log.info("Querying DB hashes batch %d/%d (paths %d–%d)...", 
                  batch_num, total_batches, i + 1, min(i + batch_size, total_paths))
         try:
-            points, _ = client.scroll(
-                collection_name=collection,
-                scroll_filter=Filter(
-                    must=[
-                        FieldCondition(
-                            key="file_path",
-                            match=MatchAny(any=batch),
-                        )
-                    ]
-                ),
-                limit=10000,
-                with_payload=["file_path", "file_hash"],
-                with_vectors=False,
-            )
-            for point in points:
-                payload = point.payload or {}
-                fp = payload.get("file_path")
-                fh = payload.get("file_hash")
-                if fp:
-                    # Keep the hash, prefer non-legacy if duplicates exist
-                    current = path_hashes.get(fp)
-                    if not current or current == "__legacy__":
-                        path_hashes[fp] = fh if fh else "__legacy__"
+            offset = None
+            while True:
+                points, offset = client.scroll(
+                    collection_name=collection,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="file_path",
+                                match=MatchAny(any=batch),
+                            )
+                        ]
+                    ),
+                    limit=10000,
+                    offset=offset,
+                    with_payload=["file_path", "file_hash"],
+                    with_vectors=False,
+                )
+                for point in points:
+                    payload = point.payload or {}
+                    fp = payload.get("file_path")
+                    fh = payload.get("file_hash")
+                    if fp:
+                        current = path_hashes.get(fp)
+                        if not current or current == "__legacy__":
+                            path_hashes[fp] = fh if fh else "__legacy__"
+                if offset is None:
+                    break
         except Exception as exc:
             log.warning("Failed to query indexed paths from Qdrant (batch %d-%d): %s", i+1, min(i+batch_size, total_paths), exc)
             
@@ -440,6 +478,7 @@ def qdrant_store_embeddings(
     chunks: list[Chunk],
     embeddings: list[list[float]],
     dry_run: bool = False,
+    hybrid: bool = False,
 ) -> int:
     """Store chunks + embeddings into Qdrant."""
     from datetime import datetime, timezone
@@ -469,7 +508,8 @@ def qdrant_store_embeddings(
             "metadata": chunk.metadata,
             "indexed_at": now.isoformat(),
         }
-        points.append(PointStruct(id=point_id, vector=emb, payload=payload))
+        vector_data = {"dense": emb} if hybrid else emb
+        points.append(PointStruct(id=point_id, vector=vector_data, payload=payload))
         
     if dry_run or not points:
         return count
@@ -592,6 +632,11 @@ def main() -> None:
         "--normalize",
         action="store_true",
         help="Normalize text (removes non-printing characters, collapses multi-newlines).",
+    )
+    parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Enable hybrid retrieval support (creates named vectors and content indexes).",
     )
     parser.add_argument(
         "--preview",
@@ -785,7 +830,7 @@ def main() -> None:
             if args.create_collection and not collection_ensured:
                 vector_dim = len(embeddings[0])
                 try:
-                    qdrant_create_collection_if_not_exists(client, args.collection, vector_dim)
+                    qdrant_create_collection_if_not_exists(client, args.collection, vector_dim, hybrid=args.hybrid)
                     collection_ensured = True
                 except Exception as exc:
                     log.error("Failed to create Qdrant collection: %s", exc)
@@ -795,14 +840,14 @@ def main() -> None:
             if not args.dry_run:
                 inserted = qdrant_store_embeddings(
                     client, args.collection, batch_chunks, embeddings,
-                    dry_run=False,
+                    dry_run=False, hybrid=args.hybrid,
                 )
                 total_inserted += inserted
                 log.info("Batch %d: Inserted %d record(s).", batch_num, inserted)
             else:
                 qdrant_store_embeddings(
                     client, args.collection, batch_chunks, embeddings,
-                    dry_run=True,
+                    dry_run=True, hybrid=args.hybrid,
                 )
                 log.info("Batch %d: Dry-run complete.", batch_num)
 

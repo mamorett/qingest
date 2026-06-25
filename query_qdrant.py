@@ -7,6 +7,9 @@ It embeds the query using the same embedding server and retrieves the most relev
 
 Usage:
   python query_qdrant.py "how do I configure the server?"
+
+  # Perform a hybrid search
+  python query_qdrant.py "how do I configure the server?" --hybrid
 """
 
 import os
@@ -15,6 +18,7 @@ import argparse
 import requests
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
+from qdrant_client.models import Prefetch, FusionQuery, Fusion
 
 # Load .env configurations
 load_dotenv()
@@ -48,6 +52,11 @@ def main():
         help="Embedding model name.",
     )
     parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Enable hybrid retrieval (requires the collection to have named vectors 'dense' and 'sparse').",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=5,
@@ -78,14 +87,30 @@ def main():
         sys.exit(1)
 
     # 2. Search Qdrant
-    print(f"Searching Qdrant collection '{args.collection}' at {args.qdrant_url}...")
+    print(f"Searching Qdrant collection '{args.collection}' at {args.qdrant_url} (hybrid={args.hybrid})...")
     try:
         client = QdrantClient(url=args.qdrant_url, api_key=args.qdrant_api_key)
-        results = client.query_points(
-            collection_name=args.collection,
-            query=query_vector,
-            limit=args.limit,
-        )
+        
+        if args.hybrid:
+            # Note: For true hybrid, you need a sparse vector (BM25/SPLADE).
+            # If your embedding API doesn't return one, you can compute it client-side.
+            # Here we provide the structure for RRF fusion.
+            # If sparse_vector is empty, it relies primarily on dense + RRF.
+            results = client.query_points(
+                collection_name=args.collection,
+                prefetch=[
+                    Prefetch(query=query_vector, using="dense", limit=args.limit * 2),
+                    # Prefetch(query=sparse_vector, using="sparse", limit=args.limit * 2), # Uncomment when sparse is available
+                ],
+                query=FusionQuery(fusion=Fusion.RRF),
+                limit=args.limit,
+            )
+        else:
+            results = client.query_points(
+                collection_name=args.collection,
+                query=query_vector,
+                limit=args.limit,
+            )
         
         if not results or not results.points:
             print("No matching results found.")
