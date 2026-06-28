@@ -561,12 +561,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--embed-url",
-        default=os.environ.get("QDRANT_EMBED_URL", os.environ.get("SURREAL_EMBED_URL", "http://127.0.0.1:8008/v1")),
+        default=os.environ.get("QDRANT_EMBED_URL", "http://127.0.0.1:8008/v1"),
         help="Base URL of the OpenAI-compatible embedding API.",
     )
     parser.add_argument(
         "--embed-model",
-        default=os.environ.get("QDRANT_EMBED_MODEL", os.environ.get("SURREAL_EMBED_MODEL", _EMBED_MODEL_DEFAULT)),
+        default=os.environ.get("QDRANT_EMBED_MODEL", _EMBED_MODEL_DEFAULT),
         help="Embedding model name (default: %s)." % _EMBED_MODEL_DEFAULT,
     )
     parser.add_argument(
@@ -581,7 +581,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--collection",
-        default=os.environ.get("QDRANT_COLLECTION", os.environ.get("SURREAL_TABLE", "mdchunk")),
+        default=os.environ.get("QDRANT_COLLECTION", "mdchunk"),
         help="Qdrant collection to store chunks into.",
     )
     parser.add_argument(

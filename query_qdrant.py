@@ -43,12 +43,12 @@ def main():
     )
     parser.add_argument(
         "--embed-url",
-        default=os.environ.get("QDRANT_EMBED_URL", os.environ.get("SURREAL_EMBED_URL", "http://127.0.0.1:8008/v1")),
+        default=os.environ.get("QDRANT_EMBED_URL", "http://127.0.0.1:8008/v1"),
         help="Base URL of the OpenAI-compatible embedding API.",
     )
     parser.add_argument(
         "--embed-model",
-        default=os.environ.get("QDRANT_EMBED_MODEL", os.environ.get("SURREAL_EMBED_MODEL", "bge-m3")),
+        default=os.environ.get("QDRANT_EMBED_MODEL", "bge-m3"),
         help="Embedding model name.",
     )
     parser.add_argument(

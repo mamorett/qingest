@@ -59,7 +59,12 @@ Create a `.env` file (see `.env.example`) to store your defaults. CLI flags alwa
 | `--create-collection` | Auto-create collection and setup payload indexes. | — |
 | `--normalize` | Normalize text (removes non-printing characters, standardizes carriage returns, and collapses multi-newlines). | — |
 | `--hybrid` | Enable hybrid retrieval support (creates named vectors and content indexes). | — |
-| `--preview` | Preview normalization changes for the first 5 markdown files without actual ingestion. | — |
+| `--preview` | Preview normalization diffs for the first 10 markdown files without actual ingestion. | — |
+| `--embed-url` | Base URL of the OpenAI-compatible embedding API. | `http://127.0.0.1:8008/v1` |
+| `--embed-model` | Embedding model name (also reads `QDRANT_EMBED_MODEL`). | `bge-m3` |
+| `--batch-size` | Number of texts to embed per API call. | `128` |
+| `--no-recursive` | Only scan the top-level directory (no subdirectories). | — |
+| `--verbose`, `-v` | Verbose (debug) logging. | — |
 | `--dry-run` | Run everything but do NOT write to Qdrant. | — |
 
 ---
@@ -88,6 +93,29 @@ python qingest.py --dir ./docs --force
 Preview how normalization affects your documents without performing actual vector ingestion:
 ```bash
 python qingest.py --dir ./docs --normalize --preview
+```
+
+### 5. Non-recursive (top-level only)
+Only scan the top-level directory (skip subdirectories):
+```bash
+python qingest.py --dir ./docs --no-recursive
+```
+
+### 6. Verbose (debug) logging
+```bash
+python qingest.py --dir ./docs --verbose
+```
+
+### 7. Custom embed endpoint and model
+```bash
+python qingest.py --dir ./docs \
+    --embed-url http://localai:80/v1 \
+    --embed-model bge-large-en
+```
+
+### 8. Dry-run (no writes to Qdrant)
+```bash
+python qingest.py --dir ./docs --dry-run
 ```
 
 ---
