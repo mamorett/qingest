@@ -7,7 +7,7 @@ Transform your directory of Markdown files into a searchable, vector-indexed Qdr
 ## ✨ Key Features
 
 - **🚀 Intelligent Idempotency:** Uses SHA256 hashing to detect file changes. Only new or modified files are processed and updated in the DB.
-- **🧠 Semantic Chunking:** Leverages `LangChain` and `Unstructured` for high-quality Markdown parsing and context-aware text splitting.
+- **🧠 Semantic Chunking:** Leverages `LangChain` for high-quality Markdown parsing and context-aware text splitting.
 - **⚡ Batch Processing:** Optimized document-level and chunk-level batching for high-performance ingestion.
 - **🔌 OpenAI Compatible:** Works with any embedding server providing an OpenAI-compatible `/v1/embeddings` endpoint.
 - **🧊 Qdrant Integration:** Full support for Qdrant vector collections, automated index creation, and metadata payload storage.
@@ -26,7 +26,7 @@ Transform your directory of Markdown files into a searchable, vector-indexed Qdr
 pip install -r requirements.txt
 ```
 
-*Note: This includes `langchain`, `unstructured`, `markdown`, and `qdrant-client`.*
+*Note: This includes `langchain-text-splitters`, `qdrant-client`, `python-dotenv`, and `requests`.*
 
 ---
 
@@ -59,7 +59,7 @@ Create a `.env` file (see `.env.example`) to store your defaults. CLI flags alwa
 | `--create-collection` | Auto-create collection and setup payload indexes. | — |
 | `--normalize` | Normalize text (removes non-printing characters, standardizes carriage returns, and collapses multi-newlines). | — |
 | `--hybrid` | Enable hybrid retrieval support (creates named vectors and content indexes). | — |
-| `--preview` | Preview normalization diffs for the first 10 markdown files without actual ingestion. | — |
+| `--preview` | Preview normalization diffs for the first 5 markdown files without actual ingestion. | — |
 | `--embed-url` | Base URL of the OpenAI-compatible embedding API. | `http://127.0.0.1:8008/v1` |
 | `--embed-model` | Embedding model name (also reads `QDRANT_EMBED_MODEL`). | `bge-m3` |
 | `--batch-size` | Number of texts to embed per API call. | `128` |
@@ -129,7 +129,7 @@ The script recursively walks your directory. For every file, it calculates a **S
 - **Identical File:** Skipped entirely.
 
 ### ✂️ Semantic Chunking
-Instead of simple line breaks, we use `LangChain`'s `MarkdownTextSplitter` combined with `UnstructuredMarkdownLoader`. This ensures that code blocks, headers, and lists are handled gracefully.
+Instead of simple line breaks, we use `LangChain`'s `MarkdownTextSplitter`. This ensures that code blocks, headers, and lists are handled gracefully.
 
 ### 💾 Qdrant Payload Structure
 Points are uploaded to Qdrant with:
