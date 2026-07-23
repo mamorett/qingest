@@ -355,6 +355,10 @@ func (c *Client) StoreEmbeddings(collection string, chunks []chunk.Chunk, embedd
 		return 0, nil
 	}
 
+	if len(chunks) != len(embeddings) {
+		return 0, fmt.Errorf("chunk/embedding count mismatch: %d chunks but %d embeddings — refusing to store", len(chunks), len(embeddings))
+	}
+
 	if dryRun {
 		for _, ch := range chunks {
 			slog.Info(fmt.Sprintf("[DRY-RUN] Would insert chunk from %s (idx %d)", ch.FilePath, ch.ChunkIndex))
@@ -371,6 +375,17 @@ func (c *Client) StoreEmbeddings(collection string, chunks []chunk.Chunk, embedd
 
 	for i, ch := range chunks {
 		emb := embeddings[i]
+
+		// Final guard at the DB boundary: never upsert a point with empty
+		// content or an empty vector. Such a point is retrievable garbage —
+		// it matches queries but shows no text to the user.
+		if strings.TrimSpace(ch.Content) == "" {
+			return 0, fmt.Errorf("refusing to store chunk %d of %s: content is empty", ch.ChunkIndex, ch.FilePath)
+		}
+		if len(emb) == 0 {
+			return 0, fmt.Errorf("refusing to store chunk %d of %s: embedding vector is empty", ch.ChunkIndex, ch.FilePath)
+		}
+
 		pointID := uuid.New().String()
 
 		payload := map[string]any{

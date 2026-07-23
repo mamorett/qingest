@@ -19,6 +19,7 @@ type embeddingRequest struct {
 }
 
 type embeddingItem struct {
+	Index     int       `json:"index"`
 	Embedding []float32 `json:"embedding"`
 }
 
@@ -54,6 +55,7 @@ func EmbedBatch(texts []string, embedURL, model string, batchSize int, onProgres
 	endpoint := fmt.Sprintf("%s/embeddings", strings.TrimRight(embedURL, "/"))
 
 	allEmbeddings := make([][]float32, 0, len(texts))
+	globalDim := -1
 
 	for i := 0; i < len(texts); i += batchSize {
 		end := i + batchSize
@@ -102,9 +104,50 @@ func EmbedBatch(texts []string, embedURL, model string, batchSize int, onProgres
 			return nil, fmt.Errorf("expected %d embeddings in response, got %d", len(batch), len(parsedResp.Data))
 		}
 
+		// Check if we have a valid index permutation from the response
+		useIndex := true
+		seen := make([]bool, len(batch))
 		for _, item := range parsedResp.Data {
-			allEmbeddings = append(allEmbeddings, item.Embedding)
+			if item.Index < 0 || item.Index >= len(batch) || seen[item.Index] {
+				useIndex = false
+				break
+			}
+			seen[item.Index] = true
 		}
+
+		batchEmbeddings := make([][]float32, len(batch))
+		if useIndex {
+			for _, item := range parsedResp.Data {
+				batchEmbeddings[item.Index] = item.Embedding
+			}
+		} else {
+			for idx, item := range parsedResp.Data {
+				batchEmbeddings[idx] = item.Embedding
+			}
+		}
+
+		// Validate every returned vector: reject nil/empty embeddings and
+		// inconsistent dimensions. A silently empty vector stored in Qdrant
+		// produces a retrievable point with no usable content — fail the
+		// whole batch instead so the file is retried, not corrupted.
+		batchDim := -1
+		for idx, vec := range batchEmbeddings {
+			if len(vec) == 0 {
+				return nil, fmt.Errorf("embedding API returned an empty vector for input %d of batch starting at %d (text: %.40q)", idx, i, batch[idx])
+			}
+			if batchDim == -1 {
+				batchDim = len(vec)
+			} else if len(vec) != batchDim {
+				return nil, fmt.Errorf("inconsistent embedding dimensions in batch starting at %d: input 0 has dim %d, input %d has dim %d", i, batchDim, idx, len(vec))
+			}
+		}
+		if globalDim == -1 {
+			globalDim = batchDim
+		} else if batchDim != globalDim {
+			return nil, fmt.Errorf("embedding dimension changed between batches: first batch had dim %d, batch starting at %d has dim %d", globalDim, i, batchDim)
+		}
+
+		allEmbeddings = append(allEmbeddings, batchEmbeddings...)
 
 		if onProgress != nil {
 			onProgress(end, len(texts))

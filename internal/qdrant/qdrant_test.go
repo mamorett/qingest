@@ -126,3 +126,47 @@ func TestQdrantClient(t *testing.T) {
 		t.Errorf("expected score 0.95, got %f", results[0].Score)
 	}
 }
+
+func TestStoreEmbeddingsRejectsGarbage(t *testing.T) {
+	// Server that should NEVER receive an upsert — if it does, the guard failed.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/collections/test/points", func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("upsert endpoint was hit despite invalid input")
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/collections/test", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"result":{"config":{"params":{"vectors":{"size":2}}}}}`))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	client := NewClient(ts.URL, "")
+
+	// Empty content must be refused.
+	_, err := client.StoreEmbeddings("test",
+		[]chunk.Chunk{{FilePath: "doc.md", ChunkIndex: 0, Content: "   ", FileHash: "h"}},
+		[][]float32{{0.1, 0.2}}, false, false)
+	if err == nil {
+		t.Error("expected error for empty content, got nil")
+	}
+
+	// Empty vector must be refused.
+	_, err = client.StoreEmbeddings("test",
+		[]chunk.Chunk{{FilePath: "doc.md", ChunkIndex: 0, Content: "valid content here", FileHash: "h"}},
+		[][]float32{{}}, false, false)
+	if err == nil {
+		t.Error("expected error for empty vector, got nil")
+	}
+
+	// Count mismatch must be refused before any network call.
+	_, err = client.StoreEmbeddings("test",
+		[]chunk.Chunk{
+			{FilePath: "doc.md", ChunkIndex: 0, Content: "valid content here", FileHash: "h"},
+			{FilePath: "doc.md", ChunkIndex: 1, Content: "more valid content", FileHash: "h"},
+		},
+		[][]float32{{0.1, 0.2}}, false, false)
+	if err == nil {
+		t.Error("expected error for chunk/embedding count mismatch, got nil")
+	}
+}

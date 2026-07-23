@@ -112,6 +112,20 @@ func LoadQueryConfig(args []string) (*QueryConfig, error) {
 
 	cfg := &QueryConfig{}
 
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage:\n  qquery [flags] \"<query_text>\"\n\n")
+		fmt.Fprintf(os.Stderr, "Semantic search query utility for Qdrant.\n\n")
+		fmt.Fprintf(os.Stderr, "Examples:\n")
+		fmt.Fprintf(os.Stderr, "  # Standard dense semantic query\n")
+		fmt.Fprintf(os.Stderr, "  qquery \"your search concept\"\n\n")
+		fmt.Fprintf(os.Stderr, "  # Query with a higher similarity threshold (recommended to filter noise)\n")
+		fmt.Fprintf(os.Stderr, "  qquery \"your search concept\" --score-threshold 0.55\n\n")
+		fmt.Fprintf(os.Stderr, "  # Query using hybrid search (uses score threshold 0.0 by default to prevent RRF score discarding)\n")
+		fmt.Fprintf(os.Stderr, "  qquery \"your search concept\" --hybrid\n\n")
+		fmt.Fprintf(os.Stderr, "Flags:\n")
+		fs.PrintDefaults()
+	}
+
 	fs.StringVar(&cfg.QdrantURL, "qdrant-url", getEnvOrDefault("QDRANT_URL", "http://localhost:6333"), "Qdrant API URL.")
 	fs.StringVar(&cfg.QdrantAPIKey, "qdrant-api-key", getEnvOrDefault("QDRANT_API_KEY", ""), "Qdrant API Key (optional).")
 	fs.StringVar(&cfg.Collection, "collection", getEnvOrDefault("QDRANT_COLLECTION", "mdchunk"), "Qdrant collection to query.")
@@ -123,6 +137,7 @@ func LoadQueryConfig(args []string) (*QueryConfig, error) {
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, pflag.ErrHelp) {
+			fs.Usage()
 			os.Exit(0)
 		}
 		return nil, err
@@ -130,9 +145,15 @@ func LoadQueryConfig(args []string) (*QueryConfig, error) {
 
 	positional := fs.Args()
 	if len(positional) < 1 {
-		return nil, errors.New("error: query positional argument required")
+		fs.Usage()
+		return nil, errors.New("query positional argument required")
 	}
 	cfg.Query = positional[0]
+
+	// If hybrid is enabled but user didn't specify score-threshold, set default to 0.0 to prevent discarding RRF results
+	if cfg.Hybrid && !fs.Changed("score-threshold") {
+		cfg.ScoreThreshold = 0.0
+	}
 
 	return cfg, nil
 }

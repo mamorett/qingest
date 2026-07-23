@@ -248,7 +248,7 @@ func main() {
 
 		batchContents := make(map[string]string)
 		batchHashes := make(map[string]string)
-		var pathsToDelete []string
+		var readOK []FileCheckResult
 
 		for _, item := range batchItems {
 			slog.Debug(fmt.Sprintf("Processing file: %s", item.RelPath))
@@ -272,22 +272,17 @@ func main() {
 				fHash = fmt.Sprintf("%x", h)
 			}
 			batchHashes[item.RelPath] = fHash
-			pathsToDelete = append(pathsToDelete, item.RelPath)
+			readOK = append(readOK, item)
 		}
 
 		if len(batchContents) == 0 {
 			continue
 		}
 
-		if !cfg.DryRun && len(pathsToDelete) > 0 {
-			slog.Debug(fmt.Sprintf("Cleaning old points from collection for: %v", pathsToDelete))
-			_, _ = qdrantClient.DeleteByPaths(cfg.Collection, pathsToDelete)
-		}
-
 		// Chunk
 		var batchChunks []chunk.Chunk
 		fileChunksCount := make(map[string]int)
-		for _, item := range batchItems {
+		for _, item := range readOK {
 			content, ok := batchContents[item.RelPath]
 			if !ok {
 				continue
@@ -341,6 +336,22 @@ func main() {
 
 		// Store
 		if !cfg.DryRun {
+			// Delete old points only for files that actually produced chunks
+			// with valid embeddings, and only immediately before upserting
+			// their replacements. Deleting earlier (e.g. before embedding)
+			// would leave a document missing from the DB entirely if the
+			// embedding call fails mid-run.
+			var pathsToDelete []string
+			for _, item := range readOK {
+				if fileChunksCount[item.RelPath] > 0 {
+					pathsToDelete = append(pathsToDelete, item.RelPath)
+				}
+			}
+			if len(pathsToDelete) > 0 {
+				slog.Debug(fmt.Sprintf("Cleaning old points from collection for: %v", pathsToDelete))
+				_, _ = qdrantClient.DeleteByPaths(cfg.Collection, pathsToDelete)
+			}
+
 			pb.Describe(formatBatchStatus(batchItems, fmt.Sprintf("Storing %d chunks in Qdrant", len(batchChunks))))
 			inserted, err := qdrantClient.StoreEmbeddings(cfg.Collection, batchChunks, embeddings, false, cfg.Hybrid)
 			if err != nil {
