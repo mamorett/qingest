@@ -96,9 +96,9 @@ func (pb *ProgressBar) drawNoLock() {
 	pctLen := len(pctStr)
 
 	elapsed := time.Since(pb.startTime)
-	speed := 0
+	speed := 0.0
 	if elapsed.Seconds() > 0.1 {
-		speed = int(float64(pb.current) / elapsed.Seconds())
+		speed = float64(pb.current) / elapsed.Seconds()
 	}
 
 	totalDigits := len(fmt.Sprintf("%d", pb.total))
@@ -106,7 +106,7 @@ func (pb *ProgressBar) drawNoLock() {
 		totalDigits = 1
 	}
 
-	countersFormat := fmt.Sprintf(" (%%%dd/%%d, %%d doc/s) ", totalDigits)
+	countersFormat := fmt.Sprintf(" (%%%dd/%%d, %%.1f doc/s) ", totalDigits)
 	countersStr := fmt.Sprintf(countersFormat, pb.current, pb.total, speed)
 	countersLen := len(countersStr)
 
@@ -301,15 +301,17 @@ func (pb *ProgressBar) Finish() {
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 
+	elapsed := time.Since(pb.startTime)
+
 	if !pb.isTerminal {
 		pct := 0
 		if pb.total > 0 {
 			pct = int(float64(pb.current) * 100 / float64(pb.total))
 		}
-		fmt.Printf("⚙ %s... %d%% (%d/%d) - Complete\n", pb.description, pct, pb.current, pb.total)
+		fmt.Printf("⚙ %s... %d%% (%d/%d) - Complete in %s\n", pb.description, pct, pb.current, pb.total, formatTime(elapsed))
 		return
 	}
 
 	pb.drawNoLock()
-	fmt.Printf("\n\n")
+	fmt.Printf("\n\033[2K✓ %s completed in %s\n\n", pb.description, formatTime(elapsed))
 }

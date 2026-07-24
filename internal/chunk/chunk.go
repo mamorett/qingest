@@ -69,11 +69,21 @@ func ChunkMarkdownText(filePath, text, fileHash string, chunkSize, chunkOverlap 
 		return nil, fmt.Errorf("markdown split failed for %s: %w", filePath, err)
 	}
 
+	var finalSplitTexts []string
+	for _, chunkText := range splitTexts {
+		if len([]rune(chunkText)) > chunkSize {
+			subChunks := splitLongText(chunkText, chunkSize, chunkOverlap)
+			finalSplitTexts = append(finalSplitTexts, subChunks...)
+		} else {
+			finalSplitTexts = append(finalSplitTexts, chunkText)
+		}
+	}
+
 	var chunks []Chunk
 	chunkIndex := 0
-	totalSplits := len(splitTexts)
+	totalSplits := len(finalSplitTexts)
 
-	for _, chunkText := range splitTexts {
+	for _, chunkText := range finalSplitTexts {
 		trimmed := strings.TrimSpace(chunkText)
 		if !isValidChunk(trimmed) {
 			continue
@@ -103,4 +113,62 @@ func ChunkMarkdownText(filePath, text, fileHash string, chunkSize, chunkOverlap 
 	}
 
 	return chunks, nil
+}
+
+// splitLongText recursively splits a long text block into smaller chunks
+// of at most maxLen characters (runes), trying to split at space/newline boundaries,
+// and preserving overlap.
+func splitLongText(text string, maxLen, overlap int) []string {
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		return []string{text}
+	}
+	if maxLen <= overlap {
+		overlap = maxLen / 2
+	}
+	if overlap < 0 {
+		overlap = 0
+	}
+
+	var result []string
+	start := 0
+	for start < len(runes) {
+		end := start + maxLen
+		if end >= len(runes) {
+			result = append(result, string(runes[start:]))
+			break
+		}
+
+		// Try to find a space or newline in the last 20% of the chunk to split cleanly
+		lookback := maxLen / 5
+		if lookback < 10 {
+			lookback = 10
+		}
+		if lookback > overlap {
+			lookback = overlap
+		}
+
+		splitAt := end
+		for j := end - 1; j >= end-lookback && j > start; j-- {
+			if runes[j] == ' ' || runes[j] == '\n' || runes[j] == '\t' {
+				splitAt = j
+				break
+			}
+		}
+
+		chunkRunes := runes[start:splitAt]
+		result = append(result, string(chunkRunes))
+
+		// Move start forward, accounting for overlap
+		start = splitAt - overlap
+		if start < 0 {
+			start = 0
+		}
+		// Prevent infinite loops if we aren't making progress
+		if start <= splitAt-maxLen {
+			start = splitAt
+		}
+	}
+
+	return result
 }

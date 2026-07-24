@@ -106,3 +106,22 @@ func TestIsValidChunk(t *testing.T) {
 		})
 	}
 }
+
+func TestChunkMarkdownTextOversized(t *testing.T) {
+	text := "This is a very long continuous paragraph of text that contains no markdown headers or double newlines. It should be split into smaller chunks of at most 100 characters by our fallback character-based sliding window splitter, splitLongText, instead of being returned as a single massive chunk."
+
+	chunks, err := ChunkMarkdownText("oversized.md", text, "hash123", 100, 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(chunks) <= 1 {
+		t.Fatalf("expected multiple chunks, got %d", len(chunks))
+	}
+
+	for i, c := range chunks {
+		if len([]rune(c.Content)) > 100 {
+			t.Errorf("chunk %d: expected length <= 100 characters, got %d", i, len([]rune(c.Content)))
+		}
+	}
+}
