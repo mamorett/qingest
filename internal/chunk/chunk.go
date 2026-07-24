@@ -71,12 +71,29 @@ func ChunkMarkdownText(filePath, text, fileHash string, chunkSize, chunkOverlap 
 
 	var finalSplitTexts []string
 	for _, chunkText := range splitTexts {
-		if len([]rune(chunkText)) > chunkSize {
-			subChunks := splitLongText(chunkText, chunkSize, chunkOverlap)
-			finalSplitTexts = append(finalSplitTexts, subChunks...)
-		} else {
-			finalSplitTexts = append(finalSplitTexts, chunkText)
+		runes := []rune(chunkText)
+		hasCJK := false
+		for _, r := range runes {
+			if (r >= 0x4E00 && r <= 0x9FFF) || 
+				(r >= 0x3400 && r <= 0x4DBF) || 
+				(r >= 0xF900 && r <= 0xFAFF) || 
+				(r >= 0x3040 && r <= 0x309F) || 
+				(r >= 0x30A0 && r <= 0x30FF) || 
+				(r >= 0xAC00 && r <= 0xD7AF) || 
+				(r >= 0xFF00 && r <= 0xFFEF) || 
+				(r >= 0x3000 && r <= 0x303F) {
+				hasCJK = true
+				break
+			}
 		}
+		safeLimit := 700
+		if hasCJK {
+			safeLimit = 400
+		}
+		if len(runes) > safeLimit {
+			chunkText = string(runes[:safeLimit])
+		}
+		finalSplitTexts = append(finalSplitTexts, chunkText)
 	}
 
 	var chunks []Chunk
