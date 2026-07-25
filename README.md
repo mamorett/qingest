@@ -1,4 +1,4 @@
-<img src="./logo.png" alt="QIngest Logo" style="width: 300px; max-width: 100%;">
+<center><img src="./logo.png" alt="QIngest Logo" style="width: 500px; max-width: 100%;"></center>
 
 # QIngest: Markdown to Qdrant Embedder
 
