@@ -12,11 +12,11 @@ import (
 
 	"strings"
 
-	"github.com/blacktop/go-termimg"
 	"github.com/mamorett/qingest/internal/chunk"
 	"github.com/mamorett/qingest/internal/config"
 	"github.com/mamorett/qingest/internal/discover"
 	"github.com/mamorett/qingest/internal/embed"
+	"github.com/mamorett/qingest/internal/logo"
 	"github.com/mamorett/qingest/internal/normalize"
 	"github.com/mamorett/qingest/internal/preview"
 	"github.com/mamorett/qingest/internal/progress"
@@ -28,23 +28,7 @@ import (
 var logoBytes []byte
 
 func printLogo() {
-	tmpFile, err := os.CreateTemp("", "qingest-logo-*.png")
-	if err != nil {
-		return
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.Write(logoBytes); err != nil {
-		tmpFile.Close()
-		return
-	}
-	tmpFile.Close()
-
-	img, err := termimg.Open(tmpFile.Name())
-	if err == nil {
-		_ = img.Width(60).Height(25).Print()
-		fmt.Println()
-	}
+	logo.PrintLogo(logoBytes)
 }
 
 type FileCheckResult struct {

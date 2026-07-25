@@ -10,32 +10,16 @@ import (
 	"os"
 	"strings"
 
-	"github.com/blacktop/go-termimg"
 	"github.com/mamorett/qingest/internal/config"
 	"github.com/mamorett/qingest/internal/embed"
+	"github.com/mamorett/qingest/internal/logo"
 )
 
 //go:embed logo.png
 var logoBytes []byte
 
 func printLogo() {
-	tmpFile, err := os.CreateTemp("", "qquery-logo-*.png")
-	if err != nil {
-		return
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.Write(logoBytes); err != nil {
-		tmpFile.Close()
-		return
-	}
-	tmpFile.Close()
-
-	img, err := termimg.Open(tmpFile.Name())
-	if err == nil {
-		_ = img.Width(60).Height(25).Print()
-		fmt.Println()
-	}
+	logo.PrintLogo(logoBytes)
 }
 
 type QueryResult struct {
