@@ -1,6 +1,6 @@
-# 🌌 QIngest: Markdown to Qdrant Embedder
+<img src="./logo.png" alt="QIngest Logo" style="width: 300px; max-width: 100%;">
 
-![QIngest Logo](./logo.png#width=200)
+# QIngest: Markdown to Qdrant Embedder
 
 Transform your directory of Markdown files into a searchable, vector-indexed Qdrant knowledge base. Written in Go, QIngest provides intelligent change detection, semantic chunking, hybrid retrieval support, and an OpenAI-compatible embedding API.
 
