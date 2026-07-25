@@ -1,0 +1,19 @@
+{
+  "default": "local",
+  "endpoints": {
+    "local": {
+      "qdrant_url": "http://localhost:6333",
+      "qdrant_api_key": "",
+      "collection": "mdchunk",
+      "embed_url": "http://127.0.0.1:8008/v1",
+      "embed_model": "bge-m3"
+    },
+    "production": {
+      "qdrant_url": "https://qdrant.example.com:6333",
+      "qdrant_api_key": "your-api-key-here",
+      "collection": "prod_docs",
+      "embed_url": "https://embed.example.com/v1",
+      "embed_model": "bge-m3"
+    }
+  }
+}

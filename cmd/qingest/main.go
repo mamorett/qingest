@@ -138,7 +138,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	slog.Info(fmt.Sprintf("Using Qdrant: %s (Collection: %s)", cfg.QdrantURL, cfg.Collection))
+	slog.Info(fmt.Sprintf("Using endpoint '%s' -> Qdrant: %s (Collection: %s)", cfg.Endpoint, cfg.QdrantURL, cfg.Collection))
 
 	qdrantClient := qdrant.NewClient(cfg.QdrantURL, cfg.QdrantAPIKey)
 	collectionEnsured := false

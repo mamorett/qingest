@@ -47,17 +47,44 @@ go mod tidy
 
 ## ⚙️ Configuration
 
-### Environment Variables (`.env`)
+QIngest reads configuration from `~/.config/qingest/config.json`. You can define multiple named endpoints and switch between them using the `--endpoint` (or `-e`) CLI flag.
 
-Create a `.env` file (see `.env.example`) to store your defaults. CLI flags always take precedence.
+### Configuration Format (`~/.config/qingest/config.json`)
 
-| Variable | Description | Default |
-|:---|:---|:---|
-| `QDRANT_URL` | Qdrant HTTP/REST URL | `http://localhost:6333` |
-| `QDRANT_API_KEY` | Qdrant API Key (optional) | `None` |
-| `QDRANT_COLLECTION` | Target collection name | `mdchunk` |
-| `QDRANT_EMBED_URL` | Embedding API base URL | `http://127.0.0.1:8008/v1` |
-| `QDRANT_EMBED_MODEL` | Embedding model name | `bge-m3` |
+Example structure (see `config.example.json`):
+
+```json
+{
+  "default": "local",
+  "endpoints": {
+    "local": {
+      "qdrant_url": "http://localhost:6333",
+      "qdrant_api_key": "",
+      "collection": "mdchunk",
+      "embed_url": "http://127.0.0.1:8008/v1",
+      "embed_model": "bge-m3"
+    },
+    "production": {
+      "qdrant_url": "https://qdrant.example.com:6333",
+      "qdrant_api_key": "your-api-key-here",
+      "collection": "prod_docs",
+      "embed_url": "https://embed.example.com/v1",
+      "embed_model": "bge-m3"
+    }
+  }
+}
+```
+
+### Endpoint Resolution Rules
+
+1. **Explicit CLI Flag:** Pass `-e <name>` or `--endpoint <name>` to select a target endpoint. If the requested endpoint does not exist, an error is reported listing available endpoints.
+2. **Default Endpoint:** If no CLI endpoint flag is specified, QIngest selects the default endpoint in this order:
+   - Top-level `"default"` or `"default_endpoint"` key in `config.json`.
+   - Endpoint with `"default": true`.
+   - Endpoint named `"default"`.
+   - Single endpoint defined in `config.json`.
+3. **No Endpoint Specified Error:** If multiple endpoints exist without a default set, or if `config.json` is missing/empty, QIngest returns an error and reports all available endpoints.
+4. **CLI Overrides:** Individual CLI flags (`--qdrant-url`, `--collection`, etc.) override values from the selected endpoint.
 
 ---
 
@@ -142,10 +169,13 @@ bin/qingest --dir ./docs --max-docs 10
 Use the built-in `qquery` binary to test query search from the command line. It automatically loads your configuration, generates embeddings for your query, and searches Qdrant:
 
 ```bash
-# Basic query (uses default settings from .env)
+# Basic query (uses default endpoint from config.json)
 bin/qquery "How do I configure the server?"
 
-# Specify Qdrant URL and collection
+# Specify a named endpoint from config.json
+bin/qquery "How do I configure the server?" --endpoint production
+
+# Override Qdrant URL and collection via CLI flags
 bin/qquery "How do I configure the server?" \
     --qdrant-url http://parma.sodalitas.net:6333 \
     --collection fffprose
@@ -163,6 +193,7 @@ bin/qquery "How do I configure the server?" --hybrid
 
 | Flag | Description | Default |
 |:---|:---|:---|
+| `-e`, `--endpoint` | Endpoint config name from `~/.config/qingest/config.json`. | Default endpoint |
 | `--qdrant-url` | Qdrant API URL. | `http://localhost:6333` |
 | `--qdrant-api-key` | Qdrant API Key (optional). | `None` |
 | `--collection` | Qdrant collection to query. | `mdchunk` |

@@ -358,8 +358,8 @@ func main() {
 	queryVector := vecs[0]
 	fmt.Printf("Successfully generated query embedding (dim=%d).\n", len(queryVector))
 
-	fmt.Printf("Searching Qdrant collection '%s' at %s (hybrid=%t, score-threshold=%.4f)...\n",
-		cfg.Collection, cfg.QdrantURL, cfg.Hybrid, cfg.ScoreThreshold)
+	fmt.Printf("Searching endpoint '%s' -> Qdrant collection '%s' at %s (hybrid=%t, score-threshold=%.4f)...\n",
+		cfg.Endpoint, cfg.Collection, cfg.QdrantURL, cfg.Hybrid, cfg.ScoreThreshold)
 
 	results, err := queryQdrantDirect(cfg, queryVector)
 	if err != nil {
