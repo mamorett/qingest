@@ -162,6 +162,32 @@ bin/qingest --dir ./docs --hybrid --create-collection
 bin/qingest --dir ./docs --max-docs 10
 ```
 
+### qingest Flags
+
+| Flag | Description | Default |
+|:---|:---|:---|
+| `-d`, `--dir` | Root directory containing `.md` files (Required). | — |
+| `-e`, `--endpoint` | Endpoint config name from `~/.config/qingest/config.json`. | Default endpoint |
+| `--qdrant-url` | Qdrant API URL. | `http://localhost:6333` |
+| `--qdrant-api-key` | Qdrant API Key (optional). | `None` |
+| `--collection` | Qdrant collection to store chunks into. | `mdchunk` |
+| `--embed-url` | Base URL of the OpenAI-compatible embedding API. | `http://127.0.0.1:8008/v1` |
+| `--embed-model` | Embedding model name. | `bge-m3` |
+| `--no-recursive` | Only scan the top-level directory (do not walk subdirectories). | — |
+| `--chunk-size` | Target chunk size in characters. | `800` |
+| `--chunk-overlap` | Overlap between chunks in characters. | `200` |
+| `--create-collection` | Create the target collection if it doesn't exist. | — |
+| `--dry-run` | Walk files, chunk, embed, but do NOT write to Qdrant. | — |
+| `--batch-size` | Number of texts to embed per API call. | `128` |
+| `--chunk-batch-size` | Number of chunks to store in Qdrant per upsert call. | `100` |
+| `--doc-batch-size` | Number of documents to process and ingest as a single batch. | `5` |
+| `-f`, `--force` | Re-embed and re-insert files that are already in the DB (delete old records first). | — |
+| `--normalize` | Normalize text (removes non-printing characters, collapses multi-newlines). | — |
+| `--hybrid` | Enable hybrid retrieval support (creates named vectors and content indexes). | — |
+| `--preview` | Preview normalization diffs for the first 5 markdown files without actual ingestion. | — |
+| `-v`, `--verbose` | Verbose (debug) logging. | — |
+| `-n`, `--max-docs` | Limit the maximum number of documents to process/ingest. | `0` (unlimited) |
+
 ---
 
 ## 🔍 Searching your Knowledge

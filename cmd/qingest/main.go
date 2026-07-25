@@ -337,7 +337,7 @@ func main() {
 			}
 
 			pb.Describe(formatBatchStatus(batchItems, fmt.Sprintf("Storing %d chunks in Qdrant", len(batchChunks))))
-			inserted, err := qdrantClient.StoreEmbeddings(cfg.Collection, batchChunks, embeddings, false, cfg.Hybrid)
+			inserted, err := qdrantClient.StoreEmbeddings(cfg.Collection, batchChunks, embeddings, cfg.ChunkBatchSize, false, cfg.Hybrid)
 			if err != nil {
 				slog.Error(fmt.Sprintf("Failed to store embeddings for batch %d: %v", batchNum, err))
 				for _, item := range batchItems {
@@ -349,7 +349,7 @@ func main() {
 			slog.Debug(fmt.Sprintf("Batch %d: Inserted %d record(s).", batchNum, inserted))
 		} else {
 			pb.Describe(formatBatchStatus(batchItems, fmt.Sprintf("Dry-run storing %d chunks", len(batchChunks))))
-			_, _ = qdrantClient.StoreEmbeddings(cfg.Collection, batchChunks, embeddings, true, cfg.Hybrid)
+			_, _ = qdrantClient.StoreEmbeddings(cfg.Collection, batchChunks, embeddings, cfg.ChunkBatchSize, true, cfg.Hybrid)
 			slog.Debug(fmt.Sprintf("Batch %d: Dry-run complete.", batchNum))
 		}
 

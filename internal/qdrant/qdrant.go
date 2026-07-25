@@ -350,7 +350,7 @@ func (c *Client) DeleteByPaths(collection string, filePaths []string) (int, erro
 }
 
 // StoreEmbeddings stores chunks + embeddings into Qdrant in batches.
-func (c *Client) StoreEmbeddings(collection string, chunks []chunk.Chunk, embeddings [][]float32, dryRun, hybrid bool) (int, error) {
+func (c *Client) StoreEmbeddings(collection string, chunks []chunk.Chunk, embeddings [][]float32, chunkBatchSize int, dryRun, hybrid bool) (int, error) {
 	if len(chunks) == 0 || len(embeddings) == 0 {
 		return 0, nil
 	}
@@ -415,11 +415,13 @@ func (c *Client) StoreEmbeddings(collection string, chunks []chunk.Chunk, embedd
 		})
 	}
 
-	upsertBatchSize := 100
+	if chunkBatchSize <= 0 {
+		chunkBatchSize = 100
+	}
 	insertedCount := 0
 
-	for idx := 0; idx < len(points); idx += upsertBatchSize {
-		end := idx + upsertBatchSize
+	for idx := 0; idx < len(points); idx += chunkBatchSize {
+		end := idx + chunkBatchSize
 		if end > len(points) {
 			end = len(points)
 		}

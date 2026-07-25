@@ -112,7 +112,7 @@ func TestQdrantClient(t *testing.T) {
 		{FilePath: "doc1.md", ChunkIndex: 0, Content: "hello", FileHash: "hash1"},
 	}
 	embeddings := [][]float32{{0.1, 0.2}}
-	stored, err := client.StoreEmbeddings("test", chunks, embeddings, false, false)
+	stored, err := client.StoreEmbeddings("test", chunks, embeddings, 100, false, false)
 	if err != nil || stored != 1 {
 		t.Fatalf("StoreEmbeddings failed: stored=%d, err=%v", stored, err)
 	}
@@ -146,7 +146,7 @@ func TestStoreEmbeddingsRejectsGarbage(t *testing.T) {
 	// Empty content must be refused.
 	_, err := client.StoreEmbeddings("test",
 		[]chunk.Chunk{{FilePath: "doc.md", ChunkIndex: 0, Content: "   ", FileHash: "h"}},
-		[][]float32{{0.1, 0.2}}, false, false)
+		[][]float32{{0.1, 0.2}}, 100, false, false)
 	if err == nil {
 		t.Error("expected error for empty content, got nil")
 	}
@@ -154,7 +154,7 @@ func TestStoreEmbeddingsRejectsGarbage(t *testing.T) {
 	// Empty vector must be refused.
 	_, err = client.StoreEmbeddings("test",
 		[]chunk.Chunk{{FilePath: "doc.md", ChunkIndex: 0, Content: "valid content here", FileHash: "h"}},
-		[][]float32{{}}, false, false)
+		[][]float32{{}}, 100, false, false)
 	if err == nil {
 		t.Error("expected error for empty vector, got nil")
 	}
@@ -165,7 +165,7 @@ func TestStoreEmbeddingsRejectsGarbage(t *testing.T) {
 			{FilePath: "doc.md", ChunkIndex: 0, Content: "valid content here", FileHash: "h"},
 			{FilePath: "doc.md", ChunkIndex: 1, Content: "more valid content", FileHash: "h"},
 		},
-		[][]float32{{0.1, 0.2}}, false, false)
+		[][]float32{{0.1, 0.2}}, 100, false, false)
 	if err == nil {
 		t.Error("expected error for chunk/embedding count mismatch, got nil")
 	}

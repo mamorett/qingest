@@ -70,6 +70,7 @@ type Config struct {
 	CreateCollection bool
 	DryRun           bool
 	BatchSize        int
+	ChunkBatchSize   int
 	DocBatchSize     int
 	Force            bool
 	Normalize        bool
@@ -255,6 +256,7 @@ func LoadIngestConfigFromFile(args []string, configPath string) (*Config, error)
 	fs.BoolVar(&cfg.CreateCollection, "create-collection", false, "Create the target collection if it doesn't exist.")
 	fs.BoolVar(&cfg.DryRun, "dry-run", false, "Walk files, chunk, embed, but do NOT write to Qdrant.")
 	fs.IntVar(&cfg.BatchSize, "batch-size", 128, "Number of texts to embed per API call.")
+	fs.IntVar(&cfg.ChunkBatchSize, "chunk-batch-size", 100, "Number of chunks to store in Qdrant per upsert call.")
 	fs.IntVar(&cfg.DocBatchSize, "doc-batch-size", 5, "Number of documents to process and ingest as a single batch (default: 5).")
 	fs.BoolVarP(&cfg.Force, "force", "f", false, "Re-embed and re-insert files that are already in the DB (delete old records first).")
 	fs.BoolVar(&cfg.Normalize, "normalize", false, "Normalize text (removes non-printing characters, collapses multi-newlines).")

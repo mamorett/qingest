@@ -31,7 +31,18 @@ func TestLoadIngestConfig_SingleEndpointDefault(t *testing.T) {
 	}`
 	cfgFile := createTestConfig(t, jsonContent)
 
-	args := []string{"--dir", tempDir, "--chunk-size", "1000", "-v"}
+	// Test default chunk-batch-size
+	argsDefault := []string{"--dir", tempDir}
+	cfgDefault, err := LoadIngestConfigFromFile(argsDefault, cfgFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfgDefault.ChunkBatchSize != 100 {
+		t.Errorf("expected default chunk batch size 100, got %d", cfgDefault.ChunkBatchSize)
+	}
+
+	// Test explicit chunk-batch-size override
+	args := []string{"--dir", tempDir, "--chunk-size", "1000", "--chunk-batch-size", "42", "-v"}
 	cfg, err := LoadIngestConfigFromFile(args, cfgFile)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -48,6 +59,9 @@ func TestLoadIngestConfig_SingleEndpointDefault(t *testing.T) {
 	}
 	if cfg.ChunkSize != 1000 {
 		t.Errorf("expected chunk size 1000, got %d", cfg.ChunkSize)
+	}
+	if cfg.ChunkBatchSize != 42 {
+		t.Errorf("expected chunk batch size 42, got %d", cfg.ChunkBatchSize)
 	}
 	if !cfg.Verbose {
 		t.Errorf("expected verbose true, got false")
