@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mamorett/qingest/internal/config"
 	"github.com/mamorett/qingest/internal/embed"
@@ -28,7 +30,15 @@ type QueryResult struct {
 	Payload map[string]any `json:"payload"`
 }
 
+func trace(name string) func() {
+	start := time.Now()
+	return func() {
+		log.Printf("%-30s %v", name, time.Since(start))
+	}
+}
+
 func executeQdrantQueryPost(baseURL, collection, apiKey string, queryBody map[string]any) ([]QueryResult, error) {
+	defer trace("executeQdrantQueryPost")()
 	jsonBytes, err := json.Marshal(queryBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal query body: %w", err)
@@ -224,10 +234,9 @@ func queryQdrantDirect(cfg *config.QueryConfig, queryVector []float32) ([]QueryR
 	}
 
 	results, err := executeQdrantQueryPost(baseURL, cfg.Collection, cfg.QdrantAPIKey, queryBody)
-	if err == nil && len(results) > 0 {
+	if err == nil {
 		return results, nil
 	}
-
 	// Fallback to simple dense query if hybrid failed (e.g. collection parameter mismatch)
 	if useHybrid {
 		fallbackBody := map[string]any{
