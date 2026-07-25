@@ -28,6 +28,95 @@ type QueryResult struct {
 	Payload map[string]any `json:"payload"`
 }
 
+func executeQdrantQueryPost(baseURL, collection, apiKey string, queryBody map[string]any) ([]QueryResult, error) {
+	jsonBytes, err := json.Marshal(queryBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal query body: %w", err)
+	}
+
+	queryURL := fmt.Sprintf("%s/collections/%s/points/query", baseURL, collection)
+	qReq, err := http.NewRequest("POST", queryURL, bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create query request: %w", err)
+	}
+	qReq.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		qReq.Header.Set("api-key", apiKey)
+	}
+
+	qResp, err := http.DefaultClient.Do(qReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute query request: %w", err)
+	}
+	defer qResp.Body.Close()
+
+	respBytes, err := io.ReadAll(qResp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read query response: %w", err)
+	}
+
+	if qResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Qdrant query returned status %d: %s", qResp.StatusCode, string(respBytes))
+	}
+
+	var genericResp map[string]any
+	if err := json.Unmarshal(respBytes, &genericResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal Qdrant query response: %w", err)
+	}
+
+	resObj, ok := genericResp["result"]
+	if !ok || resObj == nil {
+		return nil, nil
+	}
+
+	var rawPoints []any
+	switch v := resObj.(type) {
+	case []any:
+		rawPoints = v
+	case map[string]any:
+		if pts, exists := v["points"].([]any); exists {
+			rawPoints = pts
+		}
+	}
+
+	var results []QueryResult
+	for _, raw := range rawPoints {
+		ptMap, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		var id string
+		switch v := ptMap["id"].(type) {
+		case string:
+			id = v
+		case float64:
+			id = fmt.Sprintf("%.0f", v)
+		}
+
+		var score float64
+		switch s := ptMap["score"].(type) {
+		case float64:
+			score = s
+		case float32:
+			score = float64(s)
+		}
+
+		payload, _ := ptMap["payload"].(map[string]any)
+		if payload == nil {
+			payload = ptMap
+		}
+
+		results = append(results, QueryResult{
+			ID:      id,
+			Score:   score,
+			Payload: payload,
+		})
+	}
+
+	return results, nil
+}
+
 func queryQdrantDirect(cfg *config.QueryConfig, queryVector []float32) ([]QueryResult, error) {
 	baseURL := strings.TrimRight(cfg.QdrantURL, "/")
 	infoURL := fmt.Sprintf("%s/collections/%s", baseURL, cfg.Collection)
@@ -35,7 +124,6 @@ func queryQdrantDirect(cfg *config.QueryConfig, queryVector []float32) ([]QueryR
 	denseName := ""
 	sparseName := ""
 
-	// Attempt to detect vector configuration
 	req, err := http.NewRequest("GET", infoURL, nil)
 	if err == nil {
 		if cfg.QdrantAPIKey != "" {
@@ -90,7 +178,8 @@ func queryQdrantDirect(cfg *config.QueryConfig, queryVector []float32) ([]QueryR
 	}
 
 	var queryBody map[string]any
-	if cfg.Hybrid {
+	useHybrid := cfg.Hybrid || sparseName != ""
+	if useHybrid {
 		dName := "dense"
 		if denseName != "" {
 			dName = denseName
@@ -134,92 +223,22 @@ func queryQdrantDirect(cfg *config.QueryConfig, queryVector []float32) ([]QueryR
 		}
 	}
 
-	jsonBytes, err := json.Marshal(queryBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal query body: %w", err)
+	results, err := executeQdrantQueryPost(baseURL, cfg.Collection, cfg.QdrantAPIKey, queryBody)
+	if err == nil && len(results) > 0 {
+		return results, nil
 	}
 
-	queryURL := fmt.Sprintf("%s/collections/%s/points/query", baseURL, cfg.Collection)
-	qReq, err := http.NewRequest("POST", queryURL, bytes.NewBuffer(jsonBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create query request: %w", err)
-	}
-	qReq.Header.Set("Content-Type", "application/json")
-	if cfg.QdrantAPIKey != "" {
-		qReq.Header.Set("api-key", cfg.QdrantAPIKey)
-	}
-
-	qResp, err := http.DefaultClient.Do(qReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute query request: %w", err)
-	}
-	defer qResp.Body.Close()
-
-	respBytes, err := io.ReadAll(qResp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read query response: %w", err)
-	}
-
-	if qResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Qdrant query returned status %d: %s", qResp.StatusCode, string(respBytes))
-	}
-
-	var genericResp map[string]any
-	if err := json.Unmarshal(respBytes, &genericResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal Qdrant query response: %w", err)
-	}
-
-	resObj, ok := genericResp["result"]
-	if !ok || resObj == nil {
-		return nil, nil
-	}
-
-	var rawPoints []any
-	switch v := resObj.(type) {
-	case []any:
-		rawPoints = v
-	case map[string]any:
-		if pts, exists := v["points"].([]any); exists {
-			rawPoints = pts
+	// Fallback to simple dense query if hybrid failed (e.g. collection parameter mismatch)
+	if useHybrid {
+		fallbackBody := map[string]any{
+			"query":        queryVector,
+			"limit":        cfg.Limit,
+			"with_payload": true,
 		}
-	}
-
-	var results []QueryResult
-	for _, raw := range rawPoints {
-		ptMap, ok := raw.(map[string]any)
-		if !ok {
-			continue
+		if denseName != "" {
+			fallbackBody["using"] = denseName
 		}
-
-		// Extract ID (can be string UUID or numeric)
-		var id string
-		switch v := ptMap["id"].(type) {
-		case string:
-			id = v
-		case float64:
-			id = fmt.Sprintf("%.0f", v)
-		}
-
-		var score float64
-		switch s := ptMap["score"].(type) {
-		case float64:
-			score = s
-		case float32:
-			score = float64(s)
-		}
-
-		// payload is always at ptMap["payload"]; fall back to ptMap itself
-		// if the type assertion fails (some Qdrant versions flatten the payload).
-		payload, _ := ptMap["payload"].(map[string]any)
-		if payload == nil {
-			payload = ptMap
-		}
-
-		results = append(results, QueryResult{
-			ID:      id,
-			Score:   score,
-			Payload: payload,
-		})
+		return executeQdrantQueryPost(baseURL, cfg.Collection, cfg.QdrantAPIKey, fallbackBody)
 	}
 
 	return results, nil
@@ -261,20 +280,17 @@ func parsePayloadString(val any) string {
 	return ""
 }
 
-// extractContent extracts text content from a payload using a 4-tier strategy.
 func extractContent(pMap map[string]any) string {
 	if pMap == nil {
 		return ""
 	}
 
-	// Tier 1: direct top-level known field names
 	for _, key := range contentFieldNames {
 		if s := parsePayloadString(pMap[key]); s != "" {
 			return s
 		}
 	}
 
-	// Tier 2: search inside any nested map (e.g. metadata)
 	for _, val := range pMap {
 		nested, ok := val.(map[string]any)
 		if !ok {
@@ -287,7 +303,6 @@ func extractContent(pMap map[string]any) string {
 		}
 	}
 
-	// Tier 3: JSON-parse any string value that looks like a JSON object
 	for _, val := range pMap {
 		strVal, ok := val.(string)
 		if !ok || !strings.HasPrefix(strings.TrimSpace(strVal), "{") {
@@ -304,7 +319,6 @@ func extractContent(pMap map[string]any) string {
 		}
 	}
 
-	// Tier 4: nuclear — return the longest string in the payload
 	longest := ""
 	for key, val := range pMap {
 		if skipFieldsForFallback[key] {
@@ -317,7 +331,6 @@ func extractContent(pMap map[string]any) string {
 	return longest
 }
 
-// extractFilePath extracts the source file path from a payload.
 func extractFilePath(pMap map[string]any) string {
 	if pMap == nil {
 		return "unknown"
@@ -327,7 +340,6 @@ func extractFilePath(pMap map[string]any) string {
 			return s
 		}
 	}
-	// Check nested maps
 	for _, val := range pMap {
 		if nested, ok := val.(map[string]any); ok {
 			for _, key := range pathFieldNames {
@@ -338,6 +350,70 @@ func extractFilePath(pMap map[string]any) string {
 		}
 	}
 	return "unknown"
+}
+
+func extractHeadingMetadata(pMap map[string]any) (docTitle string, headingContext string) {
+	if pMap == nil {
+		return "", ""
+	}
+	if meta, ok := pMap["metadata"].(map[string]any); ok {
+		if dt, ok := meta["doc_title"].(string); ok {
+			docTitle = dt
+		}
+		if hc, ok := meta["heading_context"].(string); ok {
+			headingContext = hc
+		}
+	}
+	if docTitle == "" {
+		if dt, ok := pMap["doc_title"].(string); ok {
+			docTitle = dt
+		}
+	}
+	if headingContext == "" {
+		if hc, ok := pMap["heading_context"].(string); ok {
+			headingContext = hc
+		}
+	}
+	return docTitle, headingContext
+}
+
+func extractChunkPos(pMap map[string]any) (chunkIdx int, totalChunks int, ok bool) {
+	if pMap == nil {
+		return 0, 0, false
+	}
+
+	var meta map[string]any
+	if m, exists := pMap["metadata"].(map[string]any); exists {
+		meta = m
+	} else {
+		meta = pMap
+	}
+
+	idxFound, totalFound := false, false
+
+	if v, exists := meta["chunk_index"]; exists {
+		switch num := v.(type) {
+		case float64:
+			chunkIdx = int(num)
+			idxFound = true
+		case int:
+			chunkIdx = num
+			idxFound = true
+		}
+	}
+
+	if v, exists := meta["total_chunks"]; exists {
+		switch num := v.(type) {
+		case float64:
+			totalChunks = int(num)
+			totalFound = true
+		case int:
+			totalChunks = num
+			totalFound = true
+		}
+	}
+
+	return chunkIdx, totalChunks, (idxFound && totalFound)
 }
 
 func main() {
@@ -377,19 +453,30 @@ func main() {
 	for i, res := range results {
 		fp := extractFilePath(res.Payload)
 		content := extractContent(res.Payload)
-
-		// Mark low-confidence results clearly but still show their content
-		qualifier := ""
-		if res.Score < cfg.ScoreThreshold {
-			qualifier = " [LOW SCORE — below threshold]"
-		}
+		docTitle, headingContext := extractHeadingMetadata(res.Payload)
 
 		if content == "" {
 			rawBytes, _ := json.MarshalIndent(res.Payload, "", "  ")
 			content = fmt.Sprintf("[ERROR: no content found in payload. Raw payload:\n%s\n]", string(rawBytes))
 		}
 
-		fmt.Printf("Result #%d | Score: %.4f%s | Source: %s\n", i+1, res.Score, qualifier, fp)
+		fmt.Printf("Result #%d | Score: %.4f | Source: %s\n", i+1, res.Score, fp)
+
+		var contextParts []string
+		if docTitle != "" {
+			contextParts = append(contextParts, fmt.Sprintf("Document: %s", docTitle))
+		}
+		if headingContext != "" && headingContext != docTitle {
+			contextParts = append(contextParts, fmt.Sprintf("Section: %s", headingContext))
+		}
+		if chunkIdx, totalChunks, ok := extractChunkPos(res.Payload); ok {
+			contextParts = append(contextParts, fmt.Sprintf("Chunk: %d/%d", chunkIdx+1, totalChunks))
+		}
+
+		if len(contextParts) > 0 {
+			fmt.Printf("Context: %s\n", strings.Join(contextParts, " | "))
+		}
+
 		fmt.Println(strings.Repeat("-", 80))
 		fmt.Println(content)
 		fmt.Println(strings.Repeat("=", 80))
